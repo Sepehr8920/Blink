@@ -15,6 +15,9 @@ dependencies:
   audioplayers: ^5.2.1
   wakelock_plus: ^1.1.4
 
+dependency_overrides:
+  package_info_plus: 8.0.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
