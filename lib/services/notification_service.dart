@@ -61,31 +61,6 @@ class NotificationService {
     await _plugin.show(0, title, body, details);
   }
 
-  Future<void> schedule({
-    required int id,
-    required String title,
-    required String body,
-    required DateTime when,
-  }) async {
-    const details = NotificationDetails(
-      android: AndroidNotificationDetails(
-        _channelId,
-        _channelName,
-        channelDescription: _channelDesc,
-        importance: Importance.high,
-        priority: Priority.high,
-      ),
-    );
-    await _plugin.zonedSchedule(
-      id,
-      title,
-      body,
-      tz.TZDateTime.from(when, tz.local),
-      details,
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-    );
-  }
-
   Future<void> cancelAll() async {
     await _plugin.cancelAll();
   }
