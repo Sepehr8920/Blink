@@ -5,11 +5,13 @@ class SettingsService {
   static const _keyBreak = 'break_minutes';
   static const _keyCycles = 'total_cycles';
   static const _keySound = 'sound_enabled';
+  static const _keyVibrate = 'vibrate_enabled';
 
   static int defaultWork = 20;
   static int defaultBreak = 3;
   static int defaultCycles = 4;
   static bool defaultSound = true;
+  static bool defaultVibrate = true;
 
   static Future<Map<String, dynamic>> load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -18,6 +20,7 @@ class SettingsService {
       'breakMinutes': prefs.getInt(_keyBreak) ?? defaultBreak,
       'totalCycles': prefs.getInt(_keyCycles) ?? defaultCycles,
       'soundEnabled': prefs.getBool(_keySound) ?? defaultSound,
+      'vibrateEnabled': prefs.getBool(_keyVibrate) ?? defaultVibrate,
     };
   }
 
@@ -26,11 +29,13 @@ class SettingsService {
     required int breakMinutes,
     required int totalCycles,
     required bool soundEnabled,
+    required bool vibrateEnabled,
   }) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_keyWork, workMinutes);
     await prefs.setInt(_keyBreak, breakMinutes);
     await prefs.setInt(_keyCycles, totalCycles);
     await prefs.setBool(_keySound, soundEnabled);
+    await prefs.setBool(_keyVibrate, vibrateEnabled);
   }
 }
