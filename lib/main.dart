@@ -7,12 +7,20 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'services/notification_service.dart';
 import 'services/settings_service.dart';
+import 'services/sound_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await NotificationService.instance.init();
   runApp(const BlinkApp());
 }
+
+// Color palette
+const Color kBgDeep = Color(0xFF0B1017);
+const Color kBgMid = Color(0xFF101725);
+const Color kAccentFocus = Color(0xFF5EEAD4); // soft teal
+const Color kAccentBreak = Color(0xFFFDBA74); // soft peach
+const Color kSurface = Color(0xFF1A2230);
 
 class BlinkApp extends StatelessWidget {
   const BlinkApp({super.key});
@@ -24,12 +32,16 @@ class BlinkApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
-        scaffoldBackgroundColor: const Color(0xFF0F0F0F),
+        scaffoldBackgroundColor: kBgDeep,
         colorScheme: const ColorScheme.dark(
-          primary: Color(0xFF00E5D0),
-          surface: Color(0xFF1A1A1A),
+          primary: kAccentFocus,
+          surface: kSurface,
         ),
         useMaterial3: true,
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+        ),
       ),
       home: const TimerPage(),
     );
@@ -44,13 +56,12 @@ class TimerPage extends StatefulWidget {
 }
 
 class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
-  // Settings
   int _workMinutes = SettingsService.defaultWork;
   int _breakMinutes = SettingsService.defaultBreak;
   int _totalCycles = SettingsService.defaultCycles;
   bool _soundEnabled = SettingsService.defaultSound;
+  bool _vibrateEnabled = SettingsService.defaultVibrate;
 
-  // Timer state
   Timer? _ticker;
   int _currentCycle = 1;
   bool _isWorking = true;
@@ -58,6 +69,8 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
   int _secondsLeft = 0;
   int _totalSecondsForPhase = 0;
   DateTime? _phaseEndTime;
+
+  bool get _isLocked => !_isWorking && _isRunning;
 
   @override
   void initState() {
@@ -89,6 +102,7 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
       _breakMinutes = s['breakMinutes'];
       _totalCycles = s['totalCycles'];
       _soundEnabled = s['soundEnabled'];
+      _vibrateEnabled = s['vibrateEnabled'];
       _totalSecondsForPhase = _workMinutes * 60;
       _secondsLeft = _totalSecondsForPhase;
     });
@@ -135,26 +149,39 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
     });
     _ticker?.cancel();
     NotificationService.instance.cancelAll();
+    WakelockPlus.disable();
+  }
+
+  Future<void> _alert({required bool fullScreen, required String title, required String body}) async {
+    if (_soundEnabled) {
+      SoundService.instance.playChime();
+    }
+    if (_vibrateEnabled) {
+      HapticFeedback.heavyImpact();
+      await Future.delayed(const Duration(milliseconds: 200));
+      HapticFeedback.heavyImpact();
+    }
+    if (fullScreen) {
+      await NotificationService.instance.showBreakAlert(title: title, body: body);
+    } else {
+      await NotificationService.instance.showSimple(title: title, body: body);
+    }
   }
 
   Future<void> _switchPhase() async {
     _ticker?.cancel();
 
     if (_isWorking) {
-      // Work -> Break
+      // Work -> Break (lock)
       _isWorking = false;
       _totalSecondsForPhase = _breakMinutes * 60;
       _secondsLeft = _totalSecondsForPhase;
 
-      if (_soundEnabled) {
-        SystemSound.play(SystemSoundType.alert);
-      }
-
       await WakelockPlus.enable();
-
-      await NotificationService.instance.showNow(
-        title: 'Time to rest your eyes 👁️',
-        body: 'Take a $_breakMinutes minute break',
+      await _alert(
+        fullScreen: true,
+        title: 'Rest your eyes 👁️',
+        body: 'Look away for $_breakMinutes minute${_breakMinutes > 1 ? 's' : ''}',
       );
     } else {
       // Break -> Work or End
@@ -169,12 +196,10 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
           _secondsLeft = _totalSecondsForPhase;
           _phaseEndTime = null;
         });
-        if (_soundEnabled) {
-          SystemSound.play(SystemSoundType.alert);
-        }
-        await NotificationService.instance.showNow(
-          title: 'All cycles complete! 🎉',
-          body: 'Great job, take a longer rest',
+        await _alert(
+          fullScreen: false,
+          title: 'All done! 🎉',
+          body: 'Great job today',
         );
         return;
       }
@@ -184,13 +209,10 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
       _totalSecondsForPhase = _workMinutes * 60;
       _secondsLeft = _totalSecondsForPhase;
 
-      if (_soundEnabled) {
-        SystemSound.play(SystemSoundType.alert);
-      }
-
-      await NotificationService.instance.showNow(
-        title: 'Back to work 💪',
-        body: 'Cycle $_currentCycle of $_totalCycles started',
+      await _alert(
+        fullScreen: false,
+        title: 'Back to focus 💪',
+        body: 'Cycle $_currentCycle of $_totalCycles',
       );
     }
 
@@ -219,6 +241,7 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
   }
 
   Future<void> _openSettings() async {
+    if (_isLocked) return;
     final result = await Navigator.push<Map<String, dynamic>>(
       context,
       MaterialPageRoute(
@@ -227,6 +250,7 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
           breakMinutes: _breakMinutes,
           totalCycles: _totalCycles,
           soundEnabled: _soundEnabled,
+          vibrateEnabled: _vibrateEnabled,
         ),
       ),
     );
@@ -237,12 +261,14 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
         breakMinutes: result['breakMinutes'],
         totalCycles: result['totalCycles'],
         soundEnabled: result['soundEnabled'],
+        vibrateEnabled: result['vibrateEnabled'],
       );
       setState(() {
         _workMinutes = result['workMinutes'];
         _breakMinutes = result['breakMinutes'];
         _totalCycles = result['totalCycles'];
         _soundEnabled = result['soundEnabled'];
+        _vibrateEnabled = result['vibrateEnabled'];
       });
       _resetTimer();
     }
@@ -253,100 +279,136 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
     final progress = _totalSecondsForPhase == 0
         ? 0.0
         : 1 - (_secondsLeft / _totalSecondsForPhase);
-    final accentColor =
-        _isWorking ? const Color(0xFF00E5D0) : const Color(0xFFFFB74D);
+    final accent = _isWorking ? kAccentFocus : kAccentBreak;
 
-    return Scaffold(
-      body: SafeArea(
-        child: Stack(
-          children: [
-            Positioned(
-              top: 8,
-              right: 8,
-              child: IconButton(
-                icon: const Icon(Icons.settings, color: Colors.white54),
-                onPressed: _openSettings,
-              ),
+    return PopScope(
+      canPop: !_isLocked,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _isLocked) {
+          HapticFeedback.lightImpact();
+        }
+      },
+      child: Scaffold(
+        body: Container(
+          decoration: BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment.center,
+              radius: 1.4,
+              colors: [
+                accent.withOpacity(0.10),
+                kBgMid,
+                kBgDeep,
+              ],
+              stops: const [0.0, 0.55, 1.0],
             ),
-            Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Text(
-                    _isWorking ? 'FOCUS' : 'EYE BREAK',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 20,
-                      letterSpacing: 4,
-                      color: accentColor,
-                      fontWeight: FontWeight.w600,
+          ),
+          child: SafeArea(
+            child: Stack(
+              children: [
+                if (!_isLocked)
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: IconButton(
+                      icon: const Icon(Icons.settings, color: Colors.white54),
+                      onPressed: _openSettings,
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Cycle $_currentCycle of $_totalCycles',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      color: Colors.white54,
-                    ),
-                  ),
-                  const SizedBox(height: 40),
-                  GestureDetector(
-                    onTap: _toggleTimer,
-                    child: SizedBox(
-                      width: 280,
-                      height: 280,
-                      child: CustomPaint(
-                        painter: _CirclePainter(
-                          progress: progress,
-                          color: accentColor,
-                        ),
-                        child: Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Text(
-                                _formatTime(_secondsLeft),
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(
-                                  fontSize: 56,
-                                  fontWeight: FontWeight.w300,
-                                  color: Colors.white,
-                                  fontFeatures: [
-                                    FontFeature.tabularFigures(),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                _isRunning ? 'tap to pause' : 'tap to start',
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  color: Colors.white38,
-                                ),
-                              ),
-                            ],
+                Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 400),
+                        child: Text(
+                          _isWorking ? 'FOCUS' : 'EYE BREAK',
+                          key: ValueKey(_isWorking),
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 18,
+                            letterSpacing: 6,
+                            color: accent,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                       ),
-                    ),
+                      const SizedBox(height: 10),
+                      Text(
+                        _isLocked
+                            ? 'Look away from the screen'
+                            : 'Cycle $_currentCycle of $_totalCycles',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: _isLocked ? 15 : 14,
+                          color: Colors.white.withOpacity(0.55),
+                        ),
+                      ),
+                      const SizedBox(height: 44),
+                      GestureDetector(
+                        onTap: _isLocked ? null : _toggleTimer,
+                        child: SizedBox(
+                          width: 290,
+                          height: 290,
+                          child: CustomPaint(
+                            painter: _CirclePainter(
+                              progress: progress,
+                              color: accent,
+                            ),
+                            child: Center(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Text(
+                                    _formatTime(_secondsLeft),
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                      fontSize: 60,
+                                      fontWeight: FontWeight.w200,
+                                      color: Colors.white,
+                                      letterSpacing: 1.5,
+                                      fontFeatures: [
+                                        FontFeature.tabularFigures(),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    _isLocked
+                                        ? 'breathe slowly'
+                                        : (_isRunning
+                                            ? 'tap to pause'
+                                            : 'tap to start'),
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      color: Colors.white.withOpacity(0.35),
+                                      letterSpacing: 0.5,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 44),
+                      if (!_isLocked)
+                        TextButton.icon(
+                          onPressed: _resetTimer,
+                          icon: const Icon(Icons.refresh, color: Colors.white54),
+                          label: const Text(
+                            'Reset',
+                            style: TextStyle(
+                                color: Colors.white54, fontSize: 15),
+                          ),
+                        ),
+                    ],
                   ),
-                  const SizedBox(height: 40),
-                  TextButton.icon(
-                    onPressed: _resetTimer,
-                    icon: const Icon(Icons.refresh, color: Colors.white54),
-                    label: const Text(
-                      'Reset',
-                      style: TextStyle(color: Colors.white54, fontSize: 15),
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -364,16 +426,24 @@ class _CirclePainter extends CustomPainter {
     final center = Offset(size.width / 2, size.height / 2);
     final radius = size.width / 2 - 12;
 
+    // Soft outer glow
+    final glowPaint = Paint()
+      ..color = color.withOpacity(0.12)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 20);
+    canvas.drawCircle(center, radius, glowPaint);
+
+    // Background ring
     final bgPaint = Paint()
-      ..color = Colors.white.withOpacity(0.08)
+      ..color = Colors.white.withOpacity(0.06)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 12;
+      ..strokeWidth = 10;
     canvas.drawCircle(center, radius, bgPaint);
 
+    // Progress arc
     final progressPaint = Paint()
       ..color = color
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 12
+      ..strokeWidth = 10
       ..strokeCap = StrokeCap.round;
 
     canvas.drawArc(
@@ -396,6 +466,7 @@ class SettingsPage extends StatefulWidget {
   final int breakMinutes;
   final int totalCycles;
   final bool soundEnabled;
+  final bool vibrateEnabled;
 
   const SettingsPage({
     super.key,
@@ -403,6 +474,7 @@ class SettingsPage extends StatefulWidget {
     required this.breakMinutes,
     required this.totalCycles,
     required this.soundEnabled,
+    required this.vibrateEnabled,
   });
 
   @override
@@ -414,6 +486,7 @@ class _SettingsPageState extends State<SettingsPage> {
   late int _brk;
   late int _cycles;
   late bool _sound;
+  late bool _vibrate;
 
   @override
   void initState() {
@@ -422,28 +495,28 @@ class _SettingsPageState extends State<SettingsPage> {
     _brk = widget.breakMinutes;
     _cycles = widget.totalCycles;
     _sound = widget.soundEnabled;
+    _vibrate = widget.vibrateEnabled;
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        title: const Text('Settings', style: TextStyle(color: Colors.white)),
+        title: const Text('Settings',
+            style: TextStyle(color: Colors.white, letterSpacing: 1.2)),
         iconTheme: const IconThemeData(color: Colors.white),
       ),
       body: ListView(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(20),
         children: [
           _buildNumberRow(
-            label: 'Work duration (min)',
+            label: 'Focus duration (min)',
             value: _work,
             min: 1,
             max: 120,
             onChange: (v) => setState(() => _work = v),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 14),
           _buildNumberRow(
             label: 'Break duration (min)',
             value: _brk,
@@ -451,7 +524,7 @@ class _SettingsPageState extends State<SettingsPage> {
             max: 30,
             onChange: (v) => setState(() => _brk = v),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 14),
           _buildNumberRow(
             label: 'Cycles',
             value: _cycles,
@@ -459,21 +532,26 @@ class _SettingsPageState extends State<SettingsPage> {
             max: 30,
             onChange: (v) => setState(() => _cycles = v),
           ),
-          const SizedBox(height: 16),
-          SwitchListTile(
-            title: const Text('Sound', style: TextStyle(color: Colors.white)),
+          const SizedBox(height: 14),
+          _buildSwitchTile(
+            label: 'Sound',
             value: _sound,
-            activeColor: const Color(0xFF00E5D0),
-            onChanged: (v) => setState(() => _sound = v),
+            onChange: (v) => setState(() => _sound = v),
+          ),
+          const SizedBox(height: 14),
+          _buildSwitchTile(
+            label: 'Vibration',
+            value: _vibrate,
+            onChange: (v) => setState(() => _vibrate = v),
           ),
           const SizedBox(height: 32),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF00E5D0),
+              backgroundColor: kAccentFocus,
               foregroundColor: Colors.black,
               padding: const EdgeInsets.symmetric(vertical: 16),
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(14),
               ),
             ),
             onPressed: () {
@@ -482,9 +560,11 @@ class _SettingsPageState extends State<SettingsPage> {
                 'breakMinutes': _brk,
                 'totalCycles': _cycles,
                 'soundEnabled': _sound,
+                'vibrateEnabled': _vibrate,
               });
             },
-            child: const Text('Save', style: TextStyle(fontSize: 16)),
+            child: const Text('Save',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
           ),
         ],
       ),
@@ -499,13 +579,12 @@ class _SettingsPageState extends State<SettingsPage> {
     required ValueChanged<int> onChange,
   }) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       decoration: BoxDecoration(
-        color: const Color(0xFF1A1A1A),
+        color: kSurface,
         borderRadius: BorderRadius.circular(16),
       ),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Expanded(
             child: Text(
@@ -517,17 +596,50 @@ class _SettingsPageState extends State<SettingsPage> {
             icon: const Icon(Icons.remove, color: Colors.white70),
             onPressed: value > min ? () => onChange(value - 1) : null,
           ),
-          Text(
-            '$value',
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 18,
-              fontWeight: FontWeight.w500,
+          SizedBox(
+            width: 36,
+            child: Text(
+              '$value',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 18,
+                fontWeight: FontWeight.w500,
+              ),
             ),
           ),
           IconButton(
             icon: const Icon(Icons.add, color: Colors.white70),
             onPressed: value < max ? () => onChange(value + 1) : null,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSwitchTile({
+    required String label,
+    required bool value,
+    required ValueChanged<bool> onChange,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      decoration: BoxDecoration(
+        color: kSurface,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: const TextStyle(color: Colors.white, fontSize: 15),
+            ),
+          ),
+          Switch(
+            value: value,
+            activeColor: kAccentFocus,
+            onChanged: onChange,
           ),
         ],
       ),
