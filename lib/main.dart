@@ -16,11 +16,11 @@ void main() async {
 }
 
 // Color palette — Slate Blue theme
-const Color kBgDeep = Color(0xFF0F172A);      // deep slate background
-const Color kBgMid = Color(0xFF1E293B);       // mid slate for gradient
-const Color kAccentFocus = Color(0xFF7DD3FC); // light blue for FOCUS
-const Color kAccentBreak = Color(0xFFFCD34D); // amber for EYE BREAK
-const Color kSurface = Color(0xFF334155);     // card surface
+const Color kBgDeep = Color(0xFF0F172A);
+const Color kBgMid = Color(0xFF1E293B);
+const Color kAccentFocus = Color(0xFF7DD3FC);
+const Color kAccentBreak = Color(0xFFFCD34D);
+const Color kSurface = Color(0xFF334155);
 
 class BlinkApp extends StatelessWidget {
   const BlinkApp({super.key});
@@ -55,7 +55,8 @@ class TimerPage extends StatefulWidget {
   State<TimerPage> createState() => _TimerPageState();
 }
 
-class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
+class _TimerPageState extends State<TimerPage>
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   int _workMinutes = SettingsService.defaultWork;
   int _breakMinutes = SettingsService.defaultBreak;
   int _totalCycles = SettingsService.defaultCycles;
@@ -70,11 +71,17 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
   int _totalSecondsForPhase = 0;
   DateTime? _phaseEndTime;
 
+  late AnimationController _progressController;
+
   bool get _isLocked => !_isWorking && _isRunning;
 
   @override
   void initState() {
     super.initState();
+    _progressController = AnimationController(
+      vsync: this,
+      duration: const Duration(minutes: 1),
+    );
     WidgetsBinding.instance.addObserver(this);
     _loadSettings();
   }
@@ -82,6 +89,7 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _progressController.dispose();
     _ticker?.cancel();
     WakelockPlus.disable();
     super.dispose();
@@ -111,11 +119,14 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
   void _resyncTimer() {
     if (_phaseEndTime == null) return;
     final now = DateTime.now();
-    final diff = _phaseEndTime!.difference(now).inSeconds;
-    if (diff <= 0) {
+    final diffMs = _phaseEndTime!.difference(now).inMilliseconds;
+    if (diffMs <= 0) {
       _switchPhase();
-    } else if (diff != _secondsLeft) {
-      setState(() => _secondsLeft = diff);
+    } else {
+      final totalMs = _totalSecondsForPhase * 1000;
+      _progressController.value =
+          (1 - (diffMs / totalMs)).clamp(0.0, 1.0);
+      setState(() => _secondsLeft = (diffMs / 1000).ceil());
     }
   }
 
@@ -132,6 +143,12 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
       _isRunning = true;
       _phaseEndTime = DateTime.now().add(Duration(seconds: _secondsLeft));
     });
+
+    _progressController.duration = Duration(seconds: _totalSecondsForPhase);
+    _progressController.forward(
+      from: 1 - (_secondsLeft / _totalSecondsForPhase),
+    );
+
     _ticker?.cancel();
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
       if (_secondsLeft > 0) {
@@ -143,6 +160,7 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
   }
 
   void _pauseTimer() {
+    _progressController.stop();
     setState(() {
       _isRunning = false;
       _phaseEndTime = null;
@@ -174,6 +192,8 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
 
   Future<void> _switchPhase() async {
     _ticker?.cancel();
+    _progressController.stop();
+    _progressController.value = 0;
 
     if (_isWorking) {
       _isWorking = false;
@@ -184,7 +204,8 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
       await _alert(
         fullScreen: true,
         title: 'Rest your eyes 👁️',
-        body: 'Look away for $_breakMinutes minute${_breakMinutes > 1 ? 's' : ''}',
+        body:
+            'Look away for $_breakMinutes minute${_breakMinutes > 1 ? 's' : ''}',
       );
     } else {
       await WakelockPlus.disable();
@@ -224,6 +245,8 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
 
   void _resetTimer() {
     _ticker?.cancel();
+    _progressController.stop();
+    _progressController.value = 0;
     NotificationService.instance.cancelAll();
     WakelockPlus.disable();
     setState(() {
@@ -278,9 +301,6 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    final progress = _totalSecondsForPhase == 0
-        ? 0.0
-        : 1 - (_secondsLeft / _totalSecondsForPhase);
     final accent = _isWorking ? kAccentFocus : kAccentBreak;
 
     return PopScope(
@@ -352,11 +372,17 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
                         child: SizedBox(
                           width: 290,
                           height: 290,
-                          child: CustomPaint(
-                            painter: _CirclePainter(
-                              progress: progress,
-                              color: accent,
-                            ),
+                          child: AnimatedBuilder(
+                            animation: _progressController,
+                            builder: (context, child) {
+                              return CustomPaint(
+                                painter: _CirclePainter(
+                                  progress: _progressController.value,
+                                  color: accent,
+                                ),
+                                child: child,
+                              );
+                            },
                             child: Center(
                               child: Column(
                                 mainAxisAlignment: MainAxisAlignment.center,
@@ -375,19 +401,7 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
                                     ),
                                   ),
                                   const SizedBox(height: 6),
-                                  Text(
-                                    _isLocked
-                                        ? 'breathe slowly'
-                                        : (_isRunning
-                                            ? 'tap to pause'
-                                            : 'tap to start'),
-                                    textAlign: TextAlign.center,
-                                    style: TextStyle(
-                                      fontSize: 13,
-                                      color: Colors.white.withOpacity(0.35),
-                                      letterSpacing: 0.5,
-                                    ),
-                                  ),
+                                  _buildHint(accent),
                                 ],
                               ),
                             ),
@@ -401,8 +415,8 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
                           icon: const Icon(Icons.refresh, color: Colors.white54),
                           label: const Text(
                             'Reset',
-                            style: TextStyle(
-                                color: Colors.white54, fontSize: 15),
+                            style:
+                                TextStyle(color: Colors.white54, fontSize: 15),
                           ),
                         ),
                     ],
@@ -412,6 +426,54 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildHint(Color accent) {
+    final hintColor = Colors.white.withOpacity(0.35);
+    final iconColor = accent.withOpacity(0.75);
+
+    if (_isLocked) {
+      return Text(
+        'breathe slowly',
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          fontSize: 13,
+          color: hintColor,
+          letterSpacing: 0.5,
+        ),
+      );
+    }
+
+    final label = _isRunning ? 'tap to pause' : 'tap to start';
+    final icon = _isRunning ? Icons.pause_rounded : Icons.play_arrow_rounded;
+
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 250),
+      transitionBuilder: (child, animation) {
+        return FadeTransition(
+          opacity: animation,
+          child: ScaleTransition(scale: animation, child: child),
+        );
+      },
+      child: Row(
+        key: ValueKey(_isRunning),
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon, size: 18, color: iconColor),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 13,
+              color: hintColor,
+              letterSpacing: 0.5,
+            ),
+          ),
+        ],
       ),
     );
   }
