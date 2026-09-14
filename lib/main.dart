@@ -15,12 +15,12 @@ void main() async {
   runApp(const BlinkApp());
 }
 
-// Color palette
-const Color kBgDeep = Color(0xFF0B1017);
-const Color kBgMid = Color(0xFF101725);
-const Color kAccentFocus = Color(0xFF5EEAD4); // soft teal
-const Color kAccentBreak = Color(0xFFFDBA74); // soft peach
-const Color kSurface = Color(0xFF1A2230);
+// Color palette — Slate Blue theme
+const Color kBgDeep = Color(0xFF0F172A);      // deep slate background
+const Color kBgMid = Color(0xFF1E293B);       // mid slate for gradient
+const Color kAccentFocus = Color(0xFF7DD3FC); // light blue for FOCUS
+const Color kAccentBreak = Color(0xFFFCD34D); // amber for EYE BREAK
+const Color kSurface = Color(0xFF334155);     // card surface
 
 class BlinkApp extends StatelessWidget {
   const BlinkApp({super.key});
@@ -152,7 +152,11 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
     WakelockPlus.disable();
   }
 
-  Future<void> _alert({required bool fullScreen, required String title, required String body}) async {
+  Future<void> _alert({
+    required bool fullScreen,
+    required String title,
+    required String body,
+  }) async {
     if (_soundEnabled) {
       SoundService.instance.playChime();
     }
@@ -172,7 +176,6 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
     _ticker?.cancel();
 
     if (_isWorking) {
-      // Work -> Break (lock)
       _isWorking = false;
       _totalSecondsForPhase = _breakMinutes * 60;
       _secondsLeft = _totalSecondsForPhase;
@@ -184,7 +187,6 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
         body: 'Look away for $_breakMinutes minute${_breakMinutes > 1 ? 's' : ''}',
       );
     } else {
-      // Break -> Work or End
       await WakelockPlus.disable();
 
       if (_currentCycle >= _totalCycles) {
@@ -295,7 +297,7 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
               center: Alignment.center,
               radius: 1.4,
               colors: [
-                accent.withOpacity(0.10),
+                accent.withOpacity(0.12),
                 kBgMid,
                 kBgDeep,
               ],
@@ -426,20 +428,17 @@ class _CirclePainter extends CustomPainter {
     final center = Offset(size.width / 2, size.height / 2);
     final radius = size.width / 2 - 12;
 
-    // Soft outer glow
     final glowPaint = Paint()
-      ..color = color.withOpacity(0.12)
+      ..color = color.withOpacity(0.14)
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 20);
     canvas.drawCircle(center, radius, glowPaint);
 
-    // Background ring
     final bgPaint = Paint()
       ..color = Colors.white.withOpacity(0.06)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 10;
     canvas.drawCircle(center, radius, bgPaint);
 
-    // Progress arc
     final progressPaint = Paint()
       ..color = color
       ..style = PaintingStyle.stroke
