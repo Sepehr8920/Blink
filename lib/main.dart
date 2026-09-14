@@ -393,10 +393,15 @@ class _TimerPageState extends State<TimerPage>
   void _startBackgroundTimer() {
     _backgroundTimer?.cancel();
 
+    if (!_isRunning) {
+      return;
+    }
+
     _backgroundTimer = Timer.periodic(
       const Duration(milliseconds: 250),
       (_) {
-        if (!_isRunning) {
+        if (!_isRunning ||
+            _isSwitchingPhase) {
           return;
         }
 
@@ -408,178 +413,76 @@ class _TimerPageState extends State<TimerPage>
   }
 
   // ---------------------------------------------------------------------------
-  // Stopwatch calculations
+  // Core timer calculation
   // ---------------------------------------------------------------------------
 
   void _updateFromStopwatch({
     required bool updateNotification,
   }) {
-    if (!_isRunning) {
+    if (!_isRunning ||
+        _totalSecondsForPhase <= 0) {
       return;
     }
-
-    final elapsedMilliseconds =
-        _phaseStopwatch.elapsedMilliseconds;
 
     final totalMilliseconds =
         _totalSecondsForPhase * 1000;
 
-    if (elapsedMilliseconds >= totalMilliseconds) {
-      _secondsLeft = 0;
-      _progress = 1.0;
-
-      if (mounted) {
-        setState(() {});
-      }
-
-      if (!_isSwitchingPhase) {
-        unawaited(
-          _switchPhase(),
-        );
-      }
-
-      return;
-    }
+    final elapsedMilliseconds =
+        _phaseStopwatch.elapsedMilliseconds;
 
     final remainingMilliseconds =
         totalMilliseconds - elapsedMilliseconds;
 
+    if (remainingMilliseconds <= 0) {
+      _progress = 1.0;
+
+      if (mounted) {
+        setState(() {
+          _secondsLeft = 0;
+        });
+      }
+
+      _backgroundTimer?.cancel();
+      _backgroundTimer = null;
+
+      _uiTicker.stop();
+
+      unawaited(
+        _switchPhase(),
+      );
+
+      return;
+    }
+
+    final progress =
+        (elapsedMilliseconds / totalMilliseconds)
+            .clamp(0.0, 1.0);
+
     final remainingSeconds =
         (remainingMilliseconds / 1000).ceil();
 
-    final newProgress =
-        elapsedMilliseconds /
-            totalMilliseconds;
+    _progress = progress;
 
-    if (_secondsLeft != remainingSeconds ||
-        (_progress - newProgress).abs() > 0.001) {
-      _secondsLeft = remainingSeconds;
-      _progress = newProgress;
+    if (mounted) {
+      final shouldRebuild =
+          _secondsLeft != remainingSeconds ||
+          updateNotification == false;
 
-      if (mounted) {
-        setState(() {});
+      if (shouldRebuild) {
+        setState(() {
+          _secondsLeft = remainingSeconds;
+        });
       }
     }
 
     if (updateNotification &&
-        _lastNotificationSecond !=
-            remainingSeconds) {
+        remainingSeconds != _lastNotificationSecond) {
       _lastNotificationSecond =
           remainingSeconds;
 
       unawaited(
         _updateNotification(),
       );
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // Phase transition
-  // ---------------------------------------------------------------------------
-
-  Future<void> _switchPhase() async {
-    if (_isSwitchingPhase) {
-      return;
-    }
-
-    _isSwitchingPhase = true;
-
-    try {
-      _phaseStopwatch.stop();
-      _phaseStopwatch.reset();
-
-      if (_isWorking) {
-        // Work -> Break
-        _isWorking = false;
-
-        _totalSecondsForPhase =
-            _breakMinutes * 60;
-
-        _secondsLeft =
-            _totalSecondsForPhase;
-
-        _progress = 0.0;
-
-        _lastNotificationSecond = -1;
-
-        if (mounted) {
-          setState(() {});
-        }
-
-        if (_soundEnabled) {
-          unawaited(
-            SoundService.playBreakSound(),
-          );
-        }
-
-        if (_vibrateEnabled) {
-          HapticFeedback.heavyImpact();
-        }
-
-        await NotificationService.instance
-            .showBreakAlert();
-
-        if (!_isRunning) {
-          return;
-        }
-
-        _phaseStopwatch.start();
-
-        _updateFromStopwatch(
-          updateNotification: true,
-        );
-      } else {
-        // Break -> next work phase
-        if (_currentCycle >= _totalCycles) {
-          _isRunning = false;
-
-          _phaseStopwatch.stop();
-
-          _backgroundTimer?.cancel();
-          _backgroundTimer = null;
-
-          _uiTicker.stop();
-
-          await NotificationService.instance
-              .cancelAll();
-
-          await _disableBackgroundExecution();
-
-          WakelockPlus.disable();
-
-          if (mounted) {
-            setState(() {});
-          }
-
-          return;
-        }
-
-        _currentCycle++;
-
-        _isWorking = true;
-
-        _totalSecondsForPhase =
-            _workMinutes * 60;
-
-        _secondsLeft =
-            _totalSecondsForPhase;
-
-        _progress = 0.0;
-
-        _lastNotificationSecond = -1;
-
-        if (mounted) {
-          setState(() {});
-        }
-
-        _phaseStopwatch.start();
-
-        _updateFromStopwatch(
-          updateNotification: true,
-        );
-      }
-    } finally {
-      _isSwitchingPhase = false;
     }
   }
 
@@ -594,34 +497,141 @@ class _TimerPageState extends State<TimerPage>
 
     try {
       await NotificationService.instance.showTimer(
-        secondsLeft: _secondsLeft,
-        isWorking: _isWorking,
-        cycle: _currentCycle,
-        totalCycles: _totalCycles,
+        phase: _isWorking
+            ? 'Focus'
+            : 'Eye Break',
+        secondsRemaining: _secondsLeft,
+        totalSeconds: _totalSecondsForPhase,
+        paused: false,
       );
     } catch (_) {}
   }
 
   // ---------------------------------------------------------------------------
-  // Reset
+  // Phase transition
   // ---------------------------------------------------------------------------
 
-  Future<void> _resetTimer() async {
-    _phaseStopwatch.stop();
-    _phaseStopwatch.reset();
+  Future<void> _switchPhase() async {
+    if (_isSwitchingPhase) {
+      return;
+    }
+
+    _isSwitchingPhase = true;
 
     _backgroundTimer?.cancel();
     _backgroundTimer = null;
 
     _uiTicker.stop();
 
-    await _disableBackgroundExecution();
+    _phaseStopwatch.stop();
+    _phaseStopwatch.reset();
 
-    WakelockPlus.disable();
+    _progress = 0.0;
+    _lastNotificationSecond = -1;
 
-    _currentCycle = 1;
+    // -------------------------------------------------------------------------
+    // Focus -> Eye Break
+    // -------------------------------------------------------------------------
+
+    if (_isWorking) {
+      _isWorking = false;
+
+      _totalSecondsForPhase =
+          _breakMinutes * 60;
+
+      _secondsLeft =
+          _totalSecondsForPhase;
+
+      _isRunning = true;
+
+      if (mounted) {
+        setState(() {});
+      }
+
+      await WakelockPlus.enable();
+
+      // Start the break immediately.
+      _phaseStopwatch
+        ..reset()
+        ..start();
+
+      // Start background updates immediately.
+      _startBackgroundTimer();
+
+      if (WidgetsBinding.instance.lifecycleState ==
+          AppLifecycleState.resumed) {
+        if (!_uiTicker.isActive) {
+          _uiTicker.start();
+        }
+      }
+
+      // Alert work is deliberately not awaited before the break starts.
+      unawaited(
+        _alert(
+          fullScreen: true,
+          title: 'Rest your eyes 👁️',
+          body:
+              'Look away for $_breakMinutes minute${_breakMinutes > 1 ? 's' : ''}',
+        ),
+      );
+
+      _isSwitchingPhase = false;
+
+      // Update notification with the new phase.
+      unawaited(
+        _updateNotification(),
+      );
+
+      return;
+    }
+
+    // -------------------------------------------------------------------------
+    // Eye Break -> next Focus
+    // -------------------------------------------------------------------------
+
+    await WakelockPlus.disable();
+
+    if (_currentCycle >= _totalCycles) {
+      _isRunning = false;
+
+      _backgroundTimer?.cancel();
+      _backgroundTimer = null;
+
+      _phaseStopwatch.stop();
+      _phaseStopwatch.reset();
+
+      await _disableBackgroundExecution();
+
+      if (mounted) {
+        setState(() {
+          _currentCycle = 1;
+          _isWorking = true;
+
+          _totalSecondsForPhase =
+              _workMinutes * 60;
+
+          _secondsLeft =
+              _totalSecondsForPhase;
+
+          _progress = 0.0;
+        });
+      }
+
+      unawaited(
+        _alert(
+          fullScreen: false,
+          title: 'All done! 🎉',
+          body: 'Great job today',
+        ),
+      );
+
+      _isSwitchingPhase = false;
+
+      return;
+    }
+
+    _currentCycle++;
     _isWorking = true;
-    _isRunning = false;
 
     _totalSecondsForPhase =
         _workMinutes * 60;
@@ -631,28 +641,157 @@ class _TimerPageState extends State<TimerPage>
 
     _progress = 0.0;
 
-    _lastNotificationSecond = -1;
-
-    await NotificationService.instance
-        .cancelAll();
+    _isRunning = true;
 
     if (mounted) {
       setState(() {});
     }
+
+    // Start the next focus immediately.
+    _phaseStopwatch
+      ..reset()
+      ..start();
+
+    _startBackgroundTimer();
+
+    if (WidgetsBinding.instance.lifecycleState ==
+        AppLifecycleState.resumed) {
+      if (!_uiTicker.isActive) {
+        _uiTicker.start();
+      }
+    }
+
+    unawaited(
+      _alert(
+        fullScreen: false,
+        title: 'Back to focus 💪',
+        body:
+            'Cycle $_currentCycle of $_totalCycles',
+      ),
+    );
+
+    _isSwitchingPhase = false;
+
+    unawaited(
+      _updateNotification(),
+    );
   }
 
   // ---------------------------------------------------------------------------
-  // Settings
+  // Sound + vibration
   // ---------------------------------------------------------------------------
 
+  Future<void> _alert({
+    required bool fullScreen,
+    required String title,
+    required String body,
+  }) async {
+    if (_soundEnabled) {
+      try {
+        await SoundService.instance.playChime();
+      } catch (_) {}
+    }
+
+    if (_vibrateEnabled) {
+      try {
+        // Stronger system haptic feedback.
+        HapticFeedback.heavyImpact();
+
+        await Future.delayed(
+          const Duration(milliseconds: 180),
+        );
+
+        HapticFeedback.heavyImpact();
+      } catch (_) {}
+    }
+
+    try {
+      if (fullScreen) {
+        await NotificationService.instance
+            .showBreakAlert(
+          title: title,
+          body: body,
+        );
+      } else {
+        await NotificationService.instance
+            .showSimple(
+          title: title,
+          body: body,
+        );
+      }
+    } catch (_) {}
+  }
+
+  // ---------------------------------------------------------------------------
+  // Reset
+  // ---------------------------------------------------------------------------
+
+  void _resetTimer() {
+    _backgroundTimer?.cancel();
+    _backgroundTimer = null;
+
+    _uiTicker.stop();
+
+    _phaseStopwatch.stop();
+    _phaseStopwatch.reset();
+
+    _progress = 0.0;
+    _lastNotificationSecond = -1;
+
+    unawaited(
+      NotificationService.instance.cancelAll(),
+    );
+
+    unawaited(
+      _disableBackgroundExecution(),
+    );
+
+    WakelockPlus.disable();
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _isRunning = false;
+
+      _isWorking = true;
+
+      _currentCycle = 1;
+
+      _totalSecondsForPhase =
+          _workMinutes * 60;
+
+      _secondsLeft =
+          _totalSecondsForPhase;
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------------------------------
+
+  String _formatTime(int seconds) {
+    final minutes =
+        (seconds ~/ 60)
+            .toString()
+            .padLeft(2, '0');
+
+    final remainingSeconds =
+        (seconds % 60)
+            .toString()
+            .padLeft(2, '0');
+
+    return '$minutes:$remainingSeconds';
+  }
+
   Future<void> _openSettings() async {
-    if (_isRunning) {
+    if (_isLocked) {
       return;
     }
 
     final result =
-        await Navigator.push<
-            Map<String, dynamic>>(
+        await Navigator.push<Map<String, dynamic>>(
       context,
       MaterialPageRoute(
         builder: (_) => SettingsPage(
@@ -665,23 +804,21 @@ class _TimerPageState extends State<TimerPage>
       ),
     );
 
-    if (result == null ||
-        !mounted) {
+    if (result == null) {
       return;
     }
 
     await SettingsService.save(
-      workMinutes:
-          result['workMinutes'],
-      breakMinutes:
-          result['breakMinutes'],
-      totalCycles:
-          result['totalCycles'],
-      soundEnabled:
-          result['soundEnabled'],
-      vibrateEnabled:
-          result['vibrateEnabled'],
+      workMinutes: result['workMinutes'],
+      breakMinutes: result['breakMinutes'],
+      totalCycles: result['totalCycles'],
+      soundEnabled: result['soundEnabled'],
+      vibrateEnabled: result['vibrateEnabled'],
     );
+
+    if (!mounted) {
+      return;
+    }
 
     setState(() {
       _workMinutes =
@@ -698,165 +835,246 @@ class _TimerPageState extends State<TimerPage>
 
       _vibrateEnabled =
           result['vibrateEnabled'];
-
-      _currentCycle = 1;
-      _isWorking = true;
-
-      _totalSecondsForPhase =
-          _workMinutes * 60;
-
-      _secondsLeft =
-          _totalSecondsForPhase;
-
-      _progress = 0.0;
     });
+
+    _resetTimer();
   }
 
   // ---------------------------------------------------------------------------
-  // Helpers
-  // ---------------------------------------------------------------------------
-
-  String _formatTime(
-    int seconds,
-  ) {
-    final minutes =
-        seconds ~/ 60;
-
-    final secs =
-        seconds % 60;
-
-    return '${minutes.toString().padLeft(2, '0')}:'
-        '${secs.toString().padLeft(2, '0')}';
-  }
-
-  // ---------------------------------------------------------------------------
-  // Build
+  // Main UI
   // ---------------------------------------------------------------------------
 
   @override
-  Widget build(
-    BuildContext context,
-  ) {
-    final phaseColor =
+  Widget build(BuildContext context) {
+    final accent =
         _isWorking
             ? kAccentFocus
             : kAccentBreak;
 
     return PopScope(
       canPop: !_isLocked,
+      onPopInvokedWithResult: (
+        didPop,
+        _,
+      ) {
+        if (!didPop && _isLocked) {
+          HapticFeedback.lightImpact();
+        }
+      },
       child: Scaffold(
-        backgroundColor:
-            kBgAround,
+        backgroundColor: kBgAround,
         body: SafeArea(
-          child: Column(
+          child: Stack(
             children: [
-              Padding(
-                padding:
-                    const EdgeInsets.symmetric(
-                  horizontal: 18,
-                  vertical: 12,
-                ),
-                child: Row(
-                  children: [
-                    const Expanded(
-                      child: Text(
-                        'Blink',
-                        style: TextStyle(
-                          fontSize: 24,
-                          fontWeight:
-                              FontWeight.w700,
-                          color:
-                              Colors.white,
-                          letterSpacing: 1.0,
+              // -----------------------------------------------------------------
+              // Settings button
+              // -----------------------------------------------------------------
+
+              if (!_isLocked)
+                Positioned(
+                  top: 10,
+                  right: 10,
+                  child: Material(
+                    color: kTimerCircle,
+                    borderRadius:
+                        BorderRadius.circular(14),
+                    child: InkWell(
+                      borderRadius:
+                          BorderRadius.circular(14),
+                      onTap: _openSettings,
+                      child: Container(
+                        padding:
+                            const EdgeInsets.all(10),
+                        decoration:
+                            BoxDecoration(
+                          borderRadius:
+                              BorderRadius.circular(14),
+                          border: Border.all(
+                            color:
+                                Colors.white.withOpacity(
+                              0.12,
+                            ),
+                            width: 1,
+                          ),
+                        ),
+                        child: const Icon(
+                          Icons.settings_rounded,
+                          color: Colors.white70,
+                          size: 21,
                         ),
                       ),
                     ),
-
-                    _buildTopButton(
-                      icon:
-                          Icons.settings_outlined,
-                      onPressed:
-                          _isRunning
-                              ? null
-                              : _openSettings,
-                    ),
-                  ],
+                  ),
                 ),
-              ),
 
-              Expanded(
-                child: Center(
-                  child: Column(
-                    mainAxisSize:
-                        MainAxisSize.min,
-                    children: [
-                      Text(
+              // -----------------------------------------------------------------
+              // Main content
+              // -----------------------------------------------------------------
+
+              Center(
+                child: Column(
+                  mainAxisAlignment:
+                      MainAxisAlignment.center,
+                  crossAxisAlignment:
+                      CrossAxisAlignment.center,
+                  children: [
+                    AnimatedSwitcher(
+                      duration:
+                          const Duration(
+                        milliseconds: 300,
+                      ),
+                      child: Text(
                         _isWorking
                             ? 'FOCUS'
                             : 'EYE BREAK',
-                        style:
-                            TextStyle(
-                          color:
-                              phaseColor,
-                          fontSize: 14,
+                        key:
+                            ValueKey(_isWorking),
+                        textAlign:
+                            TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 18,
+                          letterSpacing: 6,
+                          color: accent,
                           fontWeight:
-                              FontWeight.w700,
-                          letterSpacing:
-                              2.0,
+                              FontWeight.w600,
                         ),
                       ),
+                    ),
 
-                      const SizedBox(
-                        height: 18,
+                    const SizedBox(height: 10),
+
+                    Text(
+                      _isLocked
+                          ? 'Look away from the screen'
+                          : 'Cycle $_currentCycle of $_totalCycles',
+                      textAlign:
+                          TextAlign.center,
+                      style: TextStyle(
+                        fontSize:
+                            _isLocked ? 15 : 14,
+                        color:
+                            Colors.white.withOpacity(
+                          0.60,
+                        ),
                       ),
+                    ),
 
-                      SizedBox(
-                        width: 330,
-                        height: 330,
+                    const SizedBox(height: 38),
+
+                    // -----------------------------------------------------------------
+                    // Main timer circle
+                    // -----------------------------------------------------------------
+
+                    GestureDetector(
+                      onTap: _isLocked
+                          ? null
+                          : _toggleTimer,
+                      child: SizedBox(
+                        width: 300,
+                        height: 300,
                         child: CustomPaint(
                           painter:
                               _CirclePainter(
                             progress:
                                 _progress,
                             color:
-                                phaseColor,
+                                accent,
                           ),
-                          child:
-                              Center(
-                            child:
-                                Column(
-                              mainAxisSize:
-                                  MainAxisSize.min,
+                          child: Center(
+                            child: Column(
+                              mainAxisAlignment:
+                                  MainAxisAlignment
+                                      .center,
                               children: [
                                 Text(
                                   _formatTime(
                                     _secondsLeft,
                                   ),
+                                  textAlign:
+                                      TextAlign.center,
                                   style:
                                       const TextStyle(
+                                    fontSize: 60,
+                                    fontWeight:
+                                        FontWeight.w200,
                                     color:
                                         Colors.white,
-                                    fontSize:
-                                        52,
-                                    fontWeight:
-                                        FontWeight.w300,
                                     letterSpacing:
                                         1.5,
+                                    fontFeatures: [
+                                      FontFeature
+                                          .tabularFigures(),
+                                    ],
                                   ),
                                 ),
 
                                 const SizedBox(
-                                  height: 8,
+                                  height: 6,
                                 ),
 
+                                _buildHint(
+                                  accent,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 34),
+
+                    // -----------------------------------------------------------------
+                    // Reset button
+                    // -----------------------------------------------------------------
+
+                    if (!_isLocked)
+                      Material(
+                        color: kTimerCircle,
+                        borderRadius:
+                            BorderRadius.circular(14),
+                        child: InkWell(
+                          borderRadius:
+                              BorderRadius.circular(14),
+                          onTap: _resetTimer,
+                          child: Container(
+                            padding:
+                                const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 10,
+                            ),
+                            decoration:
+                                BoxDecoration(
+                              borderRadius:
+                                  BorderRadius.circular(
+                                14,
+                              ),
+                              border: Border.all(
+                                color:
+                                    Colors.white.withOpacity(
+                                  0.12,
+                                ),
+                                width: 1,
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize:
+                                  MainAxisSize.min,
+                              children: const [
+                                Icon(
+                                  Icons.refresh_rounded,
+                                  color:
+                                      Colors.white70,
+                                  size: 18,
+                                ),
+                                SizedBox(width: 7),
                                 Text(
-                                  'Cycle $_currentCycle / $_totalCycles',
+                                  'Reset',
                                   style:
-                                      const TextStyle(
+                                      TextStyle(
                                     color:
-                                        Colors.white60,
-                                    fontSize:
-                                        13,
+                                        Colors.white70,
+                                    fontSize: 14,
                                   ),
                                 ),
                               ],
@@ -864,68 +1082,7 @@ class _TimerPageState extends State<TimerPage>
                           ),
                         ),
                       ),
-
-                      const SizedBox(
-                        height: 30,
-                      ),
-
-                      Row(
-                        mainAxisAlignment:
-                            MainAxisAlignment.center,
-                        children: [
-                          _buildActionButton(
-                            icon:
-                                _isRunning
-                                    ? Icons.pause
-                                    : Icons.play_arrow,
-                            label:
-                                _isRunning
-                                    ? 'Pause'
-                                    : 'Start',
-                            onPressed:
-                                _toggleTimer,
-                            primary: true,
-                          ),
-
-                          const SizedBox(
-                            width: 14,
-                          ),
-
-                          _buildActionButton(
-                            icon:
-                                Icons.refresh,
-                            label:
-                                'Reset',
-                            onPressed:
-                                _resetTimer,
-                            primary: false,
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-              Padding(
-                padding:
-                    const EdgeInsets.only(
-                  bottom: 20,
-                  left: 20,
-                  right: 20,
-                ),
-                child: Text(
-                  _isLocked
-                      ? 'Please complete your eye break.'
-                      : 'Rest your eyes regularly.',
-                  textAlign:
-                      TextAlign.center,
-                  style:
-                      const TextStyle(
-                    color:
-                        Colors.white70,
-                    fontSize: 13,
-                  ),
+                  ],
                 ),
               ),
             ],
@@ -935,91 +1092,73 @@ class _TimerPageState extends State<TimerPage>
     );
   }
 
-  Widget _buildTopButton({
-    required IconData icon,
-    required VoidCallback? onPressed,
-  }) {
-    return Container(
-      decoration:
-          BoxDecoration(
-        color: kTimerCircle,
-        borderRadius:
-            BorderRadius.circular(
-          12,
-        ),
-        border:
-            Border.all(
-          color:
-              Colors.white24,
-        ),
-      ),
-      child: IconButton(
-        icon:
-            Icon(
-          icon,
-          color:
-              Colors.white,
-        ),
-        onPressed:
-            onPressed,
-      ),
-    );
-  }
+  Widget _buildHint(Color accent) {
+    final hintColor =
+        Colors.white.withOpacity(0.38);
 
-  Widget _buildActionButton({
-    required IconData icon,
-    required String label,
-    required VoidCallback onPressed,
-    required bool primary,
-  }) {
-    return OutlinedButton(
-      style:
-          OutlinedButton.styleFrom(
-        backgroundColor:
-            kTimerCircle,
-        foregroundColor:
-            Colors.white,
-        side:
-            BorderSide(
-          color:
-              primary
-                  ? Colors.white38
-                  : Colors.white24,
-          width: 1.2,
+    final iconColor =
+        accent.withOpacity(0.82);
+
+    if (_isLocked) {
+      return Text(
+        'breathe slowly',
+        textAlign:
+            TextAlign.center,
+        style: TextStyle(
+          fontSize: 13,
+          color: hintColor,
+          letterSpacing: 0.5,
         ),
-        padding:
-            const EdgeInsets.symmetric(
-          horizontal: 22,
-          vertical: 14,
-        ),
-        shape:
-            RoundedRectangleBorder(
-          borderRadius:
-              BorderRadius.circular(
-            14,
-          ),
-        ),
+      );
+    }
+
+    final label =
+        _isRunning
+            ? 'tap to pause'
+            : 'tap to start';
+
+    final icon =
+        _isRunning
+            ? Icons.pause_rounded
+            : Icons.play_arrow_rounded;
+
+    return AnimatedSwitcher(
+      duration:
+          const Duration(
+        milliseconds: 220,
       ),
-      onPressed:
-          onPressed,
+      transitionBuilder:
+          (child, animation) {
+        return FadeTransition(
+          opacity: animation,
+          child: ScaleTransition(
+            scale: animation,
+            child: child,
+          ),
+        );
+      },
       child: Row(
+        key:
+            ValueKey(_isRunning),
         mainAxisSize:
             MainAxisSize.min,
+        mainAxisAlignment:
+            MainAxisAlignment.center,
         children: [
           Icon(
             icon,
-            size: 20,
+            size: 18,
+            color: iconColor,
           ),
-          const SizedBox(
-            width: 7,
-          ),
+          const SizedBox(width: 6),
           Text(
             label,
-            style:
-                const TextStyle(
-              fontSize: 14,
-              fontWeight:
-                  FontWeight.w600,
+            textAlign:
+                TextAlign.center,
+            style: TextStyle(
+              fontSize: 13,
+              color: hintColor,
+              letterSpacing: 0.5,
             ),
           ),
         ],
@@ -1054,29 +1193,11 @@ class _CirclePainter
     );
 
     // Outer circle background.
-    // It is intentionally larger than the progress ring and fades
-    // very softly toward the surrounding blue.
     final circleRadius =
         size.width / 2 - 2;
 
-    final circleRect = Rect.fromCircle(
-      center: center,
-      radius: circleRadius,
-    );
-
     final circlePaint = Paint()
-      ..shader = RadialGradient(
-        colors: const [
-          kTimerCircle,
-          Color(0xFF263F4B),
-          kBgAround,
-        ],
-        stops: const [
-          0.0,
-          0.72,
-          1.0,
-        ],
-      ).createShader(circleRect)
+      ..color = kTimerCircle
       ..style = PaintingStyle.fill;
 
     canvas.drawCircle(
@@ -1088,7 +1209,7 @@ class _CirclePainter
     // Very subtle fixed edge.
     final edgePaint = Paint()
       ..color =
-          Colors.white.withOpacity(0.06)
+          Colors.white.withOpacity(0.08)
       ..style =
           PaintingStyle.stroke
       ..strokeWidth = 1.2;
@@ -1101,7 +1222,7 @@ class _CirclePainter
 
     // Progress ring.
     final radius =
-        size.width / 2 - 20;
+        size.width / 2 - 12;
 
     final backgroundRing =
         Paint()
