@@ -25,6 +25,13 @@ jobs:
           flutter-version: '3.24.0'
           channel: 'stable'
 
+      - name: Create Flutter project structure
+        run: |
+          flutter create --org com.blink --project-name blink --platforms android temp_project
+          cp -r temp_project/android ./android
+          cp temp_project/.gitignore ./.gitignore
+          rm -rf temp_project
+
       - name: Get dependencies
         run: flutter pub get
 
