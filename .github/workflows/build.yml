@@ -37,7 +37,7 @@ jobs:
 
       - name: Get dependencies
         working-directory: ./blink_app
-        run: flutter get
+        run: flutter pub get
 
       - name: Build APK
         working-directory: ./blink_app
