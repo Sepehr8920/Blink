@@ -119,8 +119,8 @@ jobs:
           content = content.replace('<application', permissions + '\n    <application', 1)
           with open(path, "w") as f:
               f.write(content)
-          PYREOF
-          cat $MANIFEST 2>/dev/null || cat blink_app/android/app/src/main/AndroidManifest.xml
+          PYEOF
+          cat blink_app/android/app/src/main/AndroidManifest.xml
 
       - name: Get dependencies
         working-directory: ./blink_app
