@@ -20,7 +20,7 @@ class NotificationService {
       final name = await FlutterTimezone.getLocalTimezone();
       tz.setLocalLocation(tz.getLocation(name));
     } catch (_) {
-      // اگه نتونست، از UTC استفاده کن
+      // Fallback to UTC if timezone lookup fails
     }
 
     const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
@@ -28,13 +28,11 @@ class NotificationService {
 
     await _plugin.initialize(initSettings);
 
-    // درخواست اجازه‌ی نوتیفیکیشن (اندروید ۱۳+)
     await _plugin
         .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>()
         ?.requestNotificationsPermission();
 
-    // ساخت کانال
     const channel = AndroidNotificationChannel(
       _channelId,
       _channelName,
