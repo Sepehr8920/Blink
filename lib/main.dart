@@ -253,7 +253,7 @@ class _TimerPageState extends State<TimerPage>
             ? 'Focus timer is running'
             : 'Eye break is running',
         notificationImportance:
-            AndroidNotificationImportance.low,
+            AndroidNotificationImportance.normal,
         notificationIcon: const AndroidResource(
           name: 'ic_launcher',
           defType: 'mipmap',
