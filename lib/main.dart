@@ -825,4 +825,655 @@ class _TimerPageState extends State<TimerPage>
                               Center(
                             child:
                                 Column(
-                 
+                              mainAxisSize:
+                                  MainAxisSize.min,
+                              children: [
+                                Text(
+                                  _formatTime(
+                                    _secondsLeft,
+                                  ),
+                                  style:
+                                      const TextStyle(
+                                    color:
+                                        Colors.white,
+                                    fontSize:
+                                        52,
+                                    fontWeight:
+                                        FontWeight.w300,
+                                    letterSpacing:
+                                        1.5,
+                                  ),
+                                ),
+
+                                const SizedBox(
+                                  height: 8,
+                                ),
+
+                                Text(
+                                  'Cycle $_currentCycle / $_totalCycles',
+                                  style:
+                                      const TextStyle(
+                                    color:
+                                        Colors.white60,
+                                    fontSize:
+                                        13,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+
+                      const SizedBox(
+                        height: 30,
+                      ),
+
+                      Row(
+                        mainAxisAlignment:
+                            MainAxisAlignment.center,
+                        children: [
+                          _buildActionButton(
+                            icon:
+                                _isRunning
+                                    ? Icons.pause
+                                    : Icons.play_arrow,
+                            label:
+                                _isRunning
+                                    ? 'Pause'
+                                    : 'Start',
+                            onPressed:
+                                _toggleTimer,
+                            primary: true,
+                          ),
+
+                          const SizedBox(
+                            width: 14,
+                          ),
+
+                          _buildActionButton(
+                            icon:
+                                Icons.refresh,
+                            label:
+                                'Reset',
+                            onPressed:
+                                _resetTimer,
+                            primary: false,
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              Padding(
+                padding:
+                    const EdgeInsets.only(
+                  bottom: 20,
+                  left: 20,
+                  right: 20,
+                ),
+                child: Text(
+                  _isLocked
+                      ? 'Please complete your eye break.'
+                      : 'Rest your eyes regularly.',
+                  textAlign:
+                      TextAlign.center,
+                  style:
+                      const TextStyle(
+                    color:
+                        Colors.white70,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTopButton({
+    required IconData icon,
+    required VoidCallback? onPressed,
+  }) {
+    return Container(
+      decoration:
+          BoxDecoration(
+        color: kTimerCircle,
+        borderRadius:
+            BorderRadius.circular(
+          12,
+        ),
+        border:
+            Border.all(
+          color:
+              Colors.white24,
+        ),
+      ),
+      child: IconButton(
+        icon:
+            Icon(
+          icon,
+          color:
+              Colors.white,
+        ),
+        onPressed:
+            onPressed,
+      ),
+    );
+  }
+
+  Widget _buildActionButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback onPressed,
+    required bool primary,
+  }) {
+    return OutlinedButton(
+      style:
+          OutlinedButton.styleFrom(
+        backgroundColor:
+            kTimerCircle,
+        foregroundColor:
+            Colors.white,
+        side:
+            BorderSide(
+          color:
+              primary
+                  ? Colors.white38
+                  : Colors.white24,
+          width: 1.2,
+        ),
+        padding:
+            const EdgeInsets.symmetric(
+          horizontal: 22,
+          vertical: 14,
+        ),
+        shape:
+            RoundedRectangleBorder(
+          borderRadius:
+              BorderRadius.circular(
+            14,
+          ),
+        ),
+      ),
+      onPressed:
+          onPressed,
+      child: Row(
+        mainAxisSize:
+            MainAxisSize.min,
+        children: [
+          Icon(
+            icon,
+            size: 20,
+          ),
+          const SizedBox(
+            width: 7,
+          ),
+          Text(
+            label,
+            style:
+                const TextStyle(
+              fontSize: 14,
+              fontWeight:
+                  FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Progress ring + timer circle
+// -----------------------------------------------------------------------------
+
+class _CirclePainter
+    extends CustomPainter {
+  final double progress;
+  final Color color;
+
+  const _CirclePainter({
+    required this.progress,
+    required this.color,
+  });
+
+  @override
+  void paint(
+    Canvas canvas,
+    Size size,
+  ) {
+    final center =
+        Offset(
+      size.width / 2,
+      size.height / 2,
+    );
+
+    // Outer circle background.
+    // It is intentionally larger than the progress ring and fades
+    // very softly toward the surrounding blue.
+    final circleRadius =
+        size.width / 2 - 2;
+
+    final circleRect = Rect.fromCircle(
+      center: center,
+      radius: circleRadius,
+    );
+
+    final circlePaint = Paint()
+      ..shader = RadialGradient(
+        colors: const [
+          kTimerCircle,
+          Color(0xFF263F4B),
+          kBgAround,
+        ],
+        stops: const [
+          0.0,
+          0.72,
+          1.0,
+        ],
+      ).createShader(circleRect)
+      ..style = PaintingStyle.fill;
+
+    canvas.drawCircle(
+      center,
+      circleRadius,
+      circlePaint,
+    );
+
+    // Very subtle fixed edge.
+    final edgePaint = Paint()
+      ..color =
+          Colors.white.withOpacity(0.06)
+      ..style =
+          PaintingStyle.stroke
+      ..strokeWidth = 1.2;
+
+    canvas.drawCircle(
+      center,
+      circleRadius,
+      edgePaint,
+    );
+
+    // Progress ring.
+    final radius =
+        size.width / 2 - 20;
+
+    final backgroundRing =
+        Paint()
+          ..color =
+              Colors.white.withOpacity(0.08)
+          ..style =
+              PaintingStyle.stroke
+          ..strokeWidth = 10;
+
+    canvas.drawCircle(
+      center,
+      radius,
+      backgroundRing,
+    );
+
+    final progressPaint =
+        Paint()
+          ..color = color
+          ..style =
+              PaintingStyle.stroke
+          ..strokeWidth = 10
+          ..strokeCap =
+              StrokeCap.round;
+
+    final clampedProgress =
+        progress.clamp(
+      0.0,
+      1.0,
+    );
+
+    canvas.drawArc(
+      Rect.fromCircle(
+        center: center,
+        radius: radius,
+      ),
+      -math.pi / 2,
+      2 *
+          math.pi *
+          clampedProgress,
+      false,
+      progressPaint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(
+    covariant _CirclePainter oldDelegate,
+  ) {
+    return oldDelegate.progress !=
+            progress ||
+        oldDelegate.color != color;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Settings Page
+// -----------------------------------------------------------------------------
+
+class SettingsPage
+    extends StatefulWidget {
+  final int workMinutes;
+  final int breakMinutes;
+  final int totalCycles;
+  final bool soundEnabled;
+  final bool vibrateEnabled;
+
+  const SettingsPage({
+    super.key,
+    required this.workMinutes,
+    required this.breakMinutes,
+    required this.totalCycles,
+    required this.soundEnabled,
+    required this.vibrateEnabled,
+  });
+
+  @override
+  State<SettingsPage> createState() =>
+      _SettingsPageState();
+}
+
+class _SettingsPageState
+    extends State<SettingsPage> {
+  late int _work;
+  late int _brk;
+  late int _cycles;
+
+  late bool _sound;
+  late bool _vibrate;
+
+  @override
+  void initState() {
+    super.initState();
+
+    _work =
+        widget.workMinutes;
+
+    _brk =
+        widget.breakMinutes;
+
+    _cycles =
+        widget.totalCycles;
+
+    _sound =
+        widget.soundEnabled;
+
+    _vibrate =
+        widget.vibrateEnabled;
+  }
+
+  @override
+  Widget build(
+    BuildContext context,
+  ) {
+    return Scaffold(
+      backgroundColor:
+          kBgAround,
+      appBar: AppBar(
+        title: const Text(
+          'Settings',
+          style: TextStyle(
+            color: Colors.white,
+            letterSpacing: 1.2,
+          ),
+        ),
+        iconTheme:
+            const IconThemeData(
+          color: Colors.white,
+        ),
+      ),
+      body: ListView(
+        padding:
+            const EdgeInsets.all(20),
+        children: [
+          _buildNumberRow(
+            label:
+                'Focus duration (min)',
+            value: _work,
+            min: 1,
+            max: 120,
+            onChange: (v) =>
+                setState(
+              () => _work = v,
+            ),
+          ),
+
+          const SizedBox(height: 14),
+
+          _buildNumberRow(
+            label:
+                'Break duration (min)',
+            value: _brk,
+            min: 1,
+            max: 30,
+            onChange: (v) =>
+                setState(
+              () => _brk = v,
+            ),
+          ),
+
+          const SizedBox(height: 14),
+
+          _buildNumberRow(
+            label: 'Cycles',
+            value: _cycles,
+            min: 1,
+            max: 30,
+            onChange: (v) =>
+                setState(
+              () => _cycles = v,
+            ),
+          ),
+
+          const SizedBox(height: 14),
+
+          _buildSwitchTile(
+            label: 'Sound',
+            value: _sound,
+            onChange: (v) =>
+                setState(
+              () => _sound = v,
+            ),
+          ),
+
+          const SizedBox(height: 14),
+
+          _buildSwitchTile(
+            label: 'Vibration',
+            value: _vibrate,
+            onChange: (v) =>
+                setState(
+              () => _vibrate = v,
+            ),
+          ),
+
+          const SizedBox(height: 32),
+
+          ElevatedButton(
+            style:
+                ElevatedButton.styleFrom(
+              backgroundColor:
+                  kAccentFocus,
+              foregroundColor:
+                  Colors.black,
+              padding:
+                  const EdgeInsets.symmetric(
+                vertical: 16,
+              ),
+              shape:
+                  RoundedRectangleBorder(
+                borderRadius:
+                    BorderRadius.circular(
+                  14,
+                ),
+              ),
+            ),
+            onPressed: () {
+              Navigator.pop(
+                context,
+                {
+                  'workMinutes':
+                      _work,
+                  'breakMinutes':
+                      _brk,
+                  'totalCycles':
+                      _cycles,
+                  'soundEnabled':
+                      _sound,
+                  'vibrateEnabled':
+                      _vibrate,
+                },
+              );
+            },
+            child: const Text(
+              'Save',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight:
+                    FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNumberRow({
+    required String label,
+    required int value,
+    required int min,
+    required int max,
+    required ValueChanged<int>
+        onChange,
+  }) {
+    return Container(
+      padding:
+          const EdgeInsets.symmetric(
+        horizontal: 16,
+        vertical: 10,
+      ),
+      decoration:
+          BoxDecoration(
+        color: kTimerCircle,
+        borderRadius:
+            BorderRadius.circular(
+          16,
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style:
+                  const TextStyle(
+                color: Colors.white,
+                fontSize: 15,
+              ),
+            ),
+          ),
+
+          IconButton(
+            icon:
+                const Icon(
+              Icons.remove,
+              color:
+                  Colors.white70,
+            ),
+            onPressed:
+                value > min
+                    ? () => onChange(
+                          value - 1,
+                        )
+                    : null,
+          ),
+
+          SizedBox(
+            width: 36,
+            child: Text(
+              '$value',
+              textAlign:
+                  TextAlign.center,
+              style:
+                  const TextStyle(
+                color: Colors.white,
+                fontSize: 18,
+                fontWeight:
+                    FontWeight.w500,
+              ),
+            ),
+          ),
+
+          IconButton(
+            icon:
+                const Icon(
+              Icons.add,
+              color:
+                  Colors.white70,
+            ),
+            onPressed:
+                value < max
+                    ? () => onChange(
+                          value + 1,
+                        )
+                    : null,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSwitchTile({
+    required String label,
+    required bool value,
+    required ValueChanged<bool>
+        onChange,
+  }) {
+    return Container(
+      padding:
+          const EdgeInsets.symmetric(
+        horizontal: 16,
+        vertical: 4,
+      ),
+      decoration:
+          BoxDecoration(
+        color: kTimerCircle,
+        borderRadius:
+            BorderRadius.circular(
+          16,
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style:
+                  const TextStyle(
+                color: Colors.white,
+                fontSize: 15,
+              ),
+            ),
+          ),
+          Switch(
+            value: value,
+            activeColor:
+                kAccentFocus,
+            onChanged:
+                onChange,
+          ),
+        ],
+      ),
+    );
+  }
+}
