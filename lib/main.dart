@@ -19,22 +19,19 @@ class BlinkApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Directionality(
-      textDirection: TextDirection.rtl,
-      child: MaterialApp(
-        title: 'Blink',
-        debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          brightness: Brightness.dark,
-          scaffoldBackgroundColor: const Color(0xFF0F0F0F),
-          colorScheme: const ColorScheme.dark(
-            primary: Color(0xFF00E5D0),
-            surface: Color(0xFF1A1A1A),
-          ),
-          useMaterial3: true,
+    return MaterialApp(
+      title: 'Blink',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        brightness: Brightness.dark,
+        scaffoldBackgroundColor: const Color(0xFF0F0F0F),
+        colorScheme: const ColorScheme.dark(
+          primary: Color(0xFF00E5D0),
+          surface: Color(0xFF1A1A1A),
         ),
-        home: const TimerPage(),
+        useMaterial3: true,
       ),
+      home: const TimerPage(),
     );
   }
 }
@@ -47,20 +44,20 @@ class TimerPage extends StatefulWidget {
 }
 
 class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
-  // تنظیمات
+  // Settings
   int _workMinutes = SettingsService.defaultWork;
   int _breakMinutes = SettingsService.defaultBreak;
   int _totalCycles = SettingsService.defaultCycles;
   bool _soundEnabled = SettingsService.defaultSound;
 
-  // وضعیت تایمر
+  // Timer state
   Timer? _ticker;
   int _currentCycle = 1;
   bool _isWorking = true;
   bool _isRunning = false;
   int _secondsLeft = 0;
   int _totalSecondsForPhase = 0;
-  DateTime? _phaseEndTime; // زمان پایان فاز فعلی (برای بازیابی در پس‌زمینه)
+  DateTime? _phaseEndTime;
 
   @override
   void initState() {
@@ -97,7 +94,6 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
     });
   }
 
-  // اگه اپ از پس‌زمینه برگشت، زمان باقی‌مونده رو از ساعت واقعی حساب کن
   void _resyncTimer() {
     if (_phaseEndTime == null) return;
     final now = DateTime.now();
@@ -145,7 +141,7 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
     _ticker?.cancel();
 
     if (_isWorking) {
-      // کار → استراحت
+      // Work -> Break
       _isWorking = false;
       _totalSecondsForPhase = _breakMinutes * 60;
       _secondsLeft = _totalSecondsForPhase;
@@ -154,15 +150,14 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
         SystemSound.play(SystemSoundType.alert);
       }
 
-      // نگه‌داشتن صفحه روشن موقع استراحت
       await WakelockPlus.enable();
 
       await NotificationService.instance.showNow(
-        title: 'وقت استراحت چشم! 👁️',
-        body: '$_breakMinutes دقیقه به چشمت استراحت بده',
+        title: 'Time to rest your eyes 👁️',
+        body: 'Take a $_breakMinutes minute break',
       );
     } else {
-      // استراحت → کار یا پایان
+      // Break -> Work or End
       await WakelockPlus.disable();
 
       if (_currentCycle >= _totalCycles) {
@@ -178,8 +173,8 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
           SystemSound.play(SystemSoundType.alert);
         }
         await NotificationService.instance.showNow(
-          title: 'همه‌ی چرخه‌ها تموم شد! 🎉',
-          body: 'کارت تمومه، استراحت کن',
+          title: 'All cycles complete! 🎉',
+          body: 'Great job, take a longer rest',
         );
         return;
       }
@@ -194,13 +189,12 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
       }
 
       await NotificationService.instance.showNow(
-        title: 'برگشت به کار 💪',
-        body: 'چرخه‌ی $_currentCycle از $_totalCycles شروع شد',
+        title: 'Back to work 💪',
+        body: 'Cycle $_currentCycle of $_totalCycles started',
       );
     }
 
     setState(() {});
-    // خودکار فاز بعدی رو شروع کن
     _startTimer();
   }
 
@@ -250,7 +244,6 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
         _totalCycles = result['totalCycles'];
         _soundEnabled = result['soundEnabled'];
       });
-      // ریست کن با تنظیمات جدید
       _resetTimer();
     }
   }
@@ -267,33 +260,32 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
       body: SafeArea(
         child: Stack(
           children: [
-            // دکمه‌ی تنظیمات (گوشه‌ی چپ-بالا)
             Positioned(
               top: 8,
-              left: 8,
+              right: 8,
               child: IconButton(
                 icon: const Icon(Icons.settings, color: Colors.white54),
                 onPressed: _openSettings,
               ),
             ),
-            // محتوای اصلی
             Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   Text(
-                    _isWorking ? 'زمان کار' : 'استراحت چشم',
+                    _isWorking ? 'FOCUS' : 'EYE BREAK',
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                      fontSize: 22,
+                      fontSize: 20,
+                      letterSpacing: 4,
                       color: accentColor,
-                      fontWeight: FontWeight.w500,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'چرخه $_currentCycle از $_totalCycles',
+                    'Cycle $_currentCycle of $_totalCycles',
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       fontSize: 14,
@@ -301,7 +293,6 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
                     ),
                   ),
                   const SizedBox(height: 40),
-                  // دایره‌ی تایمر
                   GestureDetector(
                     onTap: _toggleTimer,
                     child: SizedBox(
@@ -330,9 +321,7 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
                               ),
                               const SizedBox(height: 8),
                               Text(
-                                _isRunning
-                                    ? 'برای توقف بزن'
-                                    : 'برای شروع بزن',
+                                _isRunning ? 'tap to pause' : 'tap to start',
                                 textAlign: TextAlign.center,
                                 style: const TextStyle(
                                   fontSize: 13,
@@ -350,7 +339,7 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
                     onPressed: _resetTimer,
                     icon: const Icon(Icons.refresh, color: Colors.white54),
                     label: const Text(
-                      'شروع دوباره',
+                      'Reset',
                       style: TextStyle(color: Colors.white54, fontSize: 15),
                     ),
                   ),
@@ -441,14 +430,14 @@ class _SettingsPageState extends State<SettingsPage> {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        title: const Text('تنظیمات', style: TextStyle(color: Colors.white)),
+        title: const Text('Settings', style: TextStyle(color: Colors.white)),
         iconTheme: const IconThemeData(color: Colors.white),
       ),
       body: ListView(
         padding: const EdgeInsets.all(24),
         children: [
           _buildNumberRow(
-            label: 'زمان کار (دقیقه)',
+            label: 'Work duration (min)',
             value: _work,
             min: 1,
             max: 120,
@@ -456,7 +445,7 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           const SizedBox(height: 16),
           _buildNumberRow(
-            label: 'زمان استراحت (دقیقه)',
+            label: 'Break duration (min)',
             value: _brk,
             min: 1,
             max: 30,
@@ -464,7 +453,7 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           const SizedBox(height: 16),
           _buildNumberRow(
-            label: 'تعداد چرخه',
+            label: 'Cycles',
             value: _cycles,
             min: 1,
             max: 30,
@@ -472,7 +461,7 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           const SizedBox(height: 16),
           SwitchListTile(
-            title: const Text('صدا', style: TextStyle(color: Colors.white)),
+            title: const Text('Sound', style: TextStyle(color: Colors.white)),
             value: _sound,
             activeColor: const Color(0xFF00E5D0),
             onChanged: (v) => setState(() => _sound = v),
@@ -495,7 +484,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 'soundEnabled': _sound,
               });
             },
-            child: const Text('ذخیره', style: TextStyle(fontSize: 16)),
+            child: const Text('Save', style: TextStyle(fontSize: 16)),
           ),
         ],
       ),
