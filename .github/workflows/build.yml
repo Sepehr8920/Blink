@@ -50,6 +50,7 @@ jobs:
           cp our_code/lib/main.dart blink_app/lib/main.dart
           cp our_code/lib/services/notification_service.dart blink_app/lib/services/notification_service.dart
           cp our_code/lib/services/settings_service.dart blink_app/lib/services/settings_service.dart
+          cp our_code/lib/services/sound_service.dart blink_app/lib/services/sound_service.dart
           cp our_code/pubspec.yaml blink_app/pubspec.yaml
 
       - name: Patch Android build config
@@ -103,10 +104,7 @@ jobs:
 
       - name: Patch AndroidManifest permissions
         run: |
-          MANIFEST=blink_app/android/app/src/main/AndroidManifest.xml
-          # اضافه کردن permission ها قبل از تگ application
           python3 - << 'PYEOF'
-          import re
           path = "blink_app/android/app/src/main/AndroidManifest.xml"
           with open(path, "r") as f:
               content = f.read()
@@ -114,14 +112,15 @@ jobs:
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
               <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
               <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
+              <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
               <uses-permission android:name="android.permission.WAKE_LOCK"/>
               <uses-permission android:name="android.permission.VIBRATE"/>
           '''
           content = content.replace('<application', permissions + '\n    <application', 1)
           with open(path, "w") as f:
               f.write(content)
-          PYEOF
-          cat $MANIFEST
+          PYREOF
+          cat $MANIFEST 2>/dev/null || cat blink_app/android/app/src/main/AndroidManifest.xml
 
       - name: Get dependencies
         working-directory: ./blink_app
