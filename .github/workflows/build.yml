@@ -35,6 +35,55 @@ jobs:
           cp our_code/lib/main.dart blink_app/lib/main.dart
           cp our_code/pubspec.yaml blink_app/pubspec.yaml
 
+      - name: Patch Android build config
+        run: |
+          cat > blink_app/android/app/build.gradle.kts << 'EOF'
+          plugins {
+              id("com.android.application")
+              id("kotlin-android")
+              id("dev.flutter.flutter-gradle-plugin")
+          }
+
+          android {
+              namespace = "com.blink.blink"
+              compileSdk = flutter.compileSdkVersion
+              ndkVersion = "27.0.12077973"
+
+              compileOptions {
+                  isCoreLibraryDesugaringEnabled = true
+                  sourceCompatibility = JavaVersion.VERSION_11
+                  targetCompatibility = JavaVersion.VERSION_11
+              }
+
+              kotlinOptions {
+                  jvmTarget = JavaVersion.VERSION_11.toString()
+              }
+
+              defaultConfig {
+                  applicationId = "com.blink.blink"
+                  minSdk = flutter.minSdkVersion
+                  targetSdk = flutter.targetSdkVersion
+                  versionCode = flutter.versionCode
+                  versionName = flutter.versionName
+                  multiDexEnabled = true
+              }
+
+              buildTypes {
+                  release {
+                      signingConfig = signingConfigs.getByName("debug")
+                  }
+              }
+          }
+
+          flutter {
+              source = "../.."
+          }
+
+          dependencies {
+              coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+          }
+          EOF
+
       - name: Get dependencies
         working-directory: ./blink_app
         run: flutter pub get
