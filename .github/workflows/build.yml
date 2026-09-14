@@ -11,7 +11,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -98,28 +98,64 @@ jobs:
           }
 
           dependencies {
-              coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+              coreLibraryDesugaring(
+                  "com.android.tools:desugar_jdk_libs:2.1.4"
+              )
           }
           EOF
 
-      - name: Patch AndroidManifest permissions
+      - name: Patch AndroidManifest
         run: |
           python3 - << 'PYEOF'
           path = "blink_app/android/app/src/main/AndroidManifest.xml"
+
           with open(path, "r") as f:
               content = f.read()
+
           permissions = '''
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
               <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
-              <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
               <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
               <uses-permission android:name="android.permission.WAKE_LOCK"/>
               <uses-permission android:name="android.permission.VIBRATE"/>
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
           '''
-          content = content.replace('<application', permissions + '\n    <application', 1)
+
+          content = content.replace(
+              '<application',
+              permissions + '\\n    <application',
+              1
+          )
+
+          service = '''
+              <service
+                  android:name="de.julianassmann.flutter_background.IsolateHolderService"
+                  android:enabled="true"
+                  android:exported="false"
+                  android:foregroundServiceType="specialUse">
+                  <property
+                      android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                      android:value="Blink timer background execution"/>
+              </service>
+          '''
+
+          content = content.replace(
+              '</application>',
+              service + '\\n    </application>',
+              1
+          )
+
+          content = content.replace(
+              '<activity',
+              '<activity\\n            android:showWhenLocked="true"\\n            android:turnScreenOn="true"',
+              1
+          )
+
           with open(path, "w") as f:
               f.write(content)
           PYEOF
+
           cat blink_app/android/app/src/main/AndroidManifest.xml
 
       - name: Get dependencies
