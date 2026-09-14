@@ -64,12 +64,20 @@ class _TimerPageState extends State<TimerPage>
   bool _vibrateEnabled = SettingsService.defaultVibrate;
 
   Timer? _ticker;
+
   int _currentCycle = 1;
   bool _isWorking = true;
   bool _isRunning = false;
   int _secondsLeft = 0;
   int _totalSecondsForPhase = 0;
-  DateTime? _phaseEndTime;
+
+  // Monotonic timer:
+  // Stopwatch is not affected by changing the phone's wall-clock time.
+  final Stopwatch _phaseStopwatch = Stopwatch();
+
+  // Prevent the same phase from being switched more than once
+  // when lifecycle/ticker callbacks happen close together.
+  bool _isSwitchingPhase = false;
 
   late AnimationController _progressController;
 
@@ -78,10 +86,14 @@ class _TimerPageState extends State<TimerPage>
   @override
   void initState() {
     super.initState();
+
     _progressController = AnimationController(
       vsync: this,
-      duration: const Duration(minutes: 1),
+      duration: const Duration(milliseconds: 100),
+      lowerBound: 0.0,
+      upperBound: 1.0,
     );
+
     WidgetsBinding.instance.addObserver(this);
     _loadSettings();
   }
@@ -89,45 +101,52 @@ class _TimerPageState extends State<TimerPage>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _progressController.dispose();
+
     _ticker?.cancel();
+    _phaseStopwatch.stop();
+
+    _progressController.dispose();
+
     WakelockPlus.disable();
+
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-    if (state == AppLifecycleState.resumed && _isRunning) {
-      _resyncTimer();
+
+    if (state == AppLifecycleState.resumed) {
+      if (_isRunning) {
+        // Recalculate immediately using the monotonic stopwatch,
+        // then restart the UI ticker.
+        _updateTimerFromElapsed();
+        _startTicker();
+      }
+    } else {
+      // Do not stop the stopwatch.
+      // We only stop the UI ticker to avoid unnecessary work while
+      // the app is not visible.
+      _ticker?.cancel();
+      _ticker = null;
     }
   }
 
   Future<void> _loadSettings() async {
     final s = await SettingsService.load();
+
+    if (!mounted) return;
+
     setState(() {
       _workMinutes = s['workMinutes'];
       _breakMinutes = s['breakMinutes'];
       _totalCycles = s['totalCycles'];
       _soundEnabled = s['soundEnabled'];
       _vibrateEnabled = s['vibrateEnabled'];
+
       _totalSecondsForPhase = _workMinutes * 60;
       _secondsLeft = _totalSecondsForPhase;
     });
-  }
-
-  void _resyncTimer() {
-    if (_phaseEndTime == null) return;
-    final now = DateTime.now();
-    final diffMs = _phaseEndTime!.difference(now).inMilliseconds;
-    if (diffMs <= 0) {
-      _switchPhase();
-    } else {
-      final totalMs = _totalSecondsForPhase * 1000;
-      _progressController.value =
-          (1 - (diffMs / totalMs)).clamp(0.0, 1.0);
-      setState(() => _secondsLeft = (diffMs / 1000).ceil());
-    }
   }
 
   void _toggleTimer() {
@@ -139,33 +158,117 @@ class _TimerPageState extends State<TimerPage>
   }
 
   void _startTimer() {
+    if (_secondsLeft <= 0 || _totalSecondsForPhase <= 0) {
+      return;
+    }
+
+    if (_isRunning) {
+      return;
+    }
+
     setState(() {
       _isRunning = true;
-      _phaseEndTime = DateTime.now().add(Duration(seconds: _secondsLeft));
     });
 
-    _progressController.duration = Duration(seconds: _totalSecondsForPhase);
-    _progressController.forward(
-      from: 1 - (_secondsLeft / _totalSecondsForPhase),
-    );
+    // Continue the same Stopwatch from exactly where it was paused.
+    // If this is the first start, it starts from zero.
+    if (!_phaseStopwatch.isRunning) {
+      _phaseStopwatch.start();
+    }
 
+    // Immediately synchronize the UI with the stopwatch.
+    _updateTimerFromElapsed();
+
+    // Then keep the visible countdown/progress updated.
+    _startTicker();
+
+    WakelockPlus.enable();
+  }
+
+  void _startTicker() {
     _ticker?.cancel();
-    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (_secondsLeft > 0) {
-        setState(() => _secondsLeft--);
-      } else {
-        _switchPhase();
+
+    if (!_isRunning) {
+      return;
+    }
+
+    _ticker = Timer.periodic(
+      const Duration(milliseconds: 100),
+      (_) {
+        if (!_isRunning || _isSwitchingPhase) {
+          return;
+        }
+
+        _updateTimerFromElapsed();
+      },
+    );
+  }
+
+  void _updateTimerFromElapsed() {
+    if (!_isRunning || _totalSecondsForPhase <= 0) {
+      return;
+    }
+
+    final totalMs = _totalSecondsForPhase * 1000;
+    final elapsedMs = _phaseStopwatch.elapsedMilliseconds;
+
+    final remainingMs = totalMs - elapsedMs;
+
+    if (remainingMs <= 0) {
+      _progressController.value = 1.0;
+
+      _secondsLeft = 0;
+
+      if (mounted) {
+        setState(() {});
       }
-    });
+
+      _switchPhase();
+      return;
+    }
+
+    final progress = (elapsedMs / totalMs).clamp(0.0, 1.0);
+
+    // The progress ring is driven directly from elapsed time.
+    // There is no separate animation that can jump when pausing/resuming.
+    _progressController.value = progress;
+
+    final remainingSeconds = (remainingMs / 1000).ceil();
+
+    if (mounted) {
+      if (_secondsLeft != remainingSeconds) {
+        setState(() {
+          _secondsLeft = remainingSeconds;
+        });
+      } else {
+        // Rebuild is still useful for the progress ring because its
+        // value can change between visible seconds.
+        setState(() {});
+      }
+    }
   }
 
   void _pauseTimer() {
-    _progressController.stop();
-    setState(() {
-      _isRunning = false;
-      _phaseEndTime = null;
-    });
+    if (!_isRunning) {
+      return;
+    }
+
+    // Stop the stopwatch at the exact current elapsed position.
+    _phaseStopwatch.stop();
+
+    // Update one final time while stopped so the UI represents the
+    // exact pause position.
+    _updateTimerFromElapsed();
+
     _ticker?.cancel();
+    _ticker = null;
+
+    if (mounted) {
+      setState(() {
+        _isRunning = false;
+      });
+    }
+
     NotificationService.instance.cancelAll();
     WakelockPlus.disable();
   }
@@ -178,84 +281,135 @@ class _TimerPageState extends State<TimerPage>
     if (_soundEnabled) {
       SoundService.instance.playChime();
     }
+
     if (_vibrateEnabled) {
       HapticFeedback.heavyImpact();
       await Future.delayed(const Duration(milliseconds: 200));
       HapticFeedback.heavyImpact();
     }
+
     if (fullScreen) {
-      await NotificationService.instance.showBreakAlert(title: title, body: body);
+      await NotificationService.instance.showBreakAlert(
+        title: title,
+        body: body,
+      );
     } else {
-      await NotificationService.instance.showSimple(title: title, body: body);
+      await NotificationService.instance.showSimple(
+        title: title,
+        body: body,
+      );
     }
   }
 
   Future<void> _switchPhase() async {
+    if (_isSwitchingPhase) {
+      return;
+    }
+
+    _isSwitchingPhase = true;
+
     _ticker?.cancel();
-    _progressController.stop();
-    _progressController.value = 0;
+    _ticker = null;
+
+    _phaseStopwatch.stop();
+    _phaseStopwatch.reset();
+
+    _progressController.value = 0.0;
 
     if (_isWorking) {
       _isWorking = false;
       _totalSecondsForPhase = _breakMinutes * 60;
       _secondsLeft = _totalSecondsForPhase;
 
+      if (mounted) {
+        setState(() {});
+      }
+
       await WakelockPlus.enable();
+
       await _alert(
         fullScreen: true,
         title: 'Rest your eyes 👁️',
         body:
             'Look away for $_breakMinutes minute${_breakMinutes > 1 ? 's' : ''}',
       );
-    } else {
-      await WakelockPlus.disable();
 
-      if (_currentCycle >= _totalCycles) {
+      _isSwitchingPhase = false;
+
+      if (mounted) {
+        setState(() {});
+      }
+
+      _startTimer();
+      return;
+    }
+
+    await WakelockPlus.disable();
+
+    if (_currentCycle >= _totalCycles) {
+      if (mounted) {
         setState(() {
           _isRunning = false;
           _currentCycle = 1;
           _isWorking = true;
           _totalSecondsForPhase = _workMinutes * 60;
           _secondsLeft = _totalSecondsForPhase;
-          _phaseEndTime = null;
         });
-        await _alert(
-          fullScreen: false,
-          title: 'All done! 🎉',
-          body: 'Great job today',
-        );
-        return;
       }
-
-      _currentCycle++;
-      _isWorking = true;
-      _totalSecondsForPhase = _workMinutes * 60;
-      _secondsLeft = _totalSecondsForPhase;
 
       await _alert(
         fullScreen: false,
-        title: 'Back to focus 💪',
-        body: 'Cycle $_currentCycle of $_totalCycles',
+        title: 'All done! 🎉',
+        body: 'Great job today',
       );
+
+      _isSwitchingPhase = false;
+      return;
     }
 
-    setState(() {});
+    _currentCycle++;
+    _isWorking = true;
+    _totalSecondsForPhase = _workMinutes * 60;
+    _secondsLeft = _totalSecondsForPhase;
+
+    if (mounted) {
+      setState(() {});
+    }
+
+    await _alert(
+      fullScreen: false,
+      title: 'Back to focus 💪',
+      body: 'Cycle $_currentCycle of $_totalCycles',
+    );
+
+    _isSwitchingPhase = false;
+
     _startTimer();
   }
 
   void _resetTimer() {
     _ticker?.cancel();
+    _ticker = null;
+
+    _phaseStopwatch.stop();
+    _phaseStopwatch.reset();
+
     _progressController.stop();
-    _progressController.value = 0;
+    _progressController.value = 0.0;
+
     NotificationService.instance.cancelAll();
     WakelockPlus.disable();
+
+    if (!mounted) {
+      return;
+    }
+
     setState(() {
       _isRunning = false;
       _isWorking = true;
       _currentCycle = 1;
       _totalSecondsForPhase = _workMinutes * 60;
       _secondsLeft = _totalSecondsForPhase;
-      _phaseEndTime = null;
     });
   }
 
@@ -266,7 +420,10 @@ class _TimerPageState extends State<TimerPage>
   }
 
   Future<void> _openSettings() async {
-    if (_isLocked) return;
+    if (_isLocked) {
+      return;
+    }
+
     final result = await Navigator.push<Map<String, dynamic>>(
       context,
       MaterialPageRoute(
@@ -288,6 +445,11 @@ class _TimerPageState extends State<TimerPage>
         soundEnabled: result['soundEnabled'],
         vibrateEnabled: result['vibrateEnabled'],
       );
+
+      if (!mounted) {
+        return;
+      }
+
       setState(() {
         _workMinutes = result['workMinutes'];
         _breakMinutes = result['breakMinutes'];
@@ -295,6 +457,7 @@ class _TimerPageState extends State<TimerPage>
         _soundEnabled = result['soundEnabled'];
         _vibrateEnabled = result['vibrateEnabled'];
       });
+
       _resetTimer();
     }
   }
@@ -332,7 +495,10 @@ class _TimerPageState extends State<TimerPage>
                     top: 8,
                     right: 8,
                     child: IconButton(
-                      icon: const Icon(Icons.settings, color: Colors.white54),
+                      icon: const Icon(
+                        Icons.settings,
+                        color: Colors.white54,
+                      ),
                       onPressed: _openSettings,
                     ),
                   ),
@@ -385,7 +551,8 @@ class _TimerPageState extends State<TimerPage>
                             },
                             child: Center(
                               child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
+                                mainAxisAlignment:
+                                    MainAxisAlignment.center,
                                 children: [
                                   Text(
                                     _formatTime(_secondsLeft),
@@ -412,11 +579,16 @@ class _TimerPageState extends State<TimerPage>
                       if (!_isLocked)
                         TextButton.icon(
                           onPressed: _resetTimer,
-                          icon: const Icon(Icons.refresh, color: Colors.white54),
+                          icon: const Icon(
+                            Icons.refresh,
+                            color: Colors.white54,
+                          ),
                           label: const Text(
                             'Reset',
-                            style:
-                                TextStyle(color: Colors.white54, fontSize: 15),
+                            style: TextStyle(
+                              color: Colors.white54,
+                              fontSize: 15,
+                            ),
                           ),
                         ),
                     ],
@@ -447,14 +619,18 @@ class _TimerPageState extends State<TimerPage>
     }
 
     final label = _isRunning ? 'tap to pause' : 'tap to start';
-    final icon = _isRunning ? Icons.pause_rounded : Icons.play_arrow_rounded;
+    final icon =
+        _isRunning ? Icons.pause_rounded : Icons.play_arrow_rounded;
 
     return AnimatedSwitcher(
       duration: const Duration(milliseconds: 250),
       transitionBuilder: (child, animation) {
         return FadeTransition(
           opacity: animation,
-          child: ScaleTransition(scale: animation, child: child),
+          child: ScaleTransition(
+            scale: animation,
+            child: child,
+          ),
         );
       },
       child: Row(
@@ -462,7 +638,11 @@ class _TimerPageState extends State<TimerPage>
         mainAxisSize: MainAxisSize.min,
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(icon, size: 18, color: iconColor),
+          Icon(
+            icon,
+            size: 18,
+            color: iconColor,
+          ),
           const SizedBox(width: 6),
           Text(
             label,
@@ -483,7 +663,10 @@ class _CirclePainter extends CustomPainter {
   final double progress;
   final Color color;
 
-  _CirclePainter({required this.progress, required this.color});
+  _CirclePainter({
+    required this.progress,
+    required this.color,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -492,14 +675,27 @@ class _CirclePainter extends CustomPainter {
 
     final glowPaint = Paint()
       ..color = color.withOpacity(0.14)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 20);
-    canvas.drawCircle(center, radius, glowPaint);
+      ..maskFilter = const MaskFilter.blur(
+        BlurStyle.normal,
+        20,
+      );
+
+    canvas.drawCircle(
+      center,
+      radius,
+      glowPaint,
+    );
 
     final bgPaint = Paint()
       ..color = Colors.white.withOpacity(0.06)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 10;
-    canvas.drawCircle(center, radius, bgPaint);
+
+    canvas.drawCircle(
+      center,
+      radius,
+      bgPaint,
+    );
 
     final progressPaint = Paint()
       ..color = color
@@ -508,7 +704,10 @@ class _CirclePainter extends CustomPainter {
       ..strokeCap = StrokeCap.round;
 
     canvas.drawArc(
-      Rect.fromCircle(center: center, radius: radius),
+      Rect.fromCircle(
+        center: center,
+        radius: radius,
+      ),
       -math.pi / 2,
       2 * math.pi * progress.clamp(0.0, 1.0),
       false,
@@ -518,7 +717,8 @@ class _CirclePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _CirclePainter oldDelegate) {
-    return oldDelegate.progress != progress || oldDelegate.color != color;
+    return oldDelegate.progress != progress ||
+        oldDelegate.color != color;
   }
 }
 
@@ -552,6 +752,7 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   void initState() {
     super.initState();
+
     _work = widget.workMinutes;
     _brk = widget.breakMinutes;
     _cycles = widget.totalCycles;
@@ -563,9 +764,16 @@ class _SettingsPageState extends State<SettingsPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Settings',
-            style: TextStyle(color: Colors.white, letterSpacing: 1.2)),
-        iconTheme: const IconThemeData(color: Colors.white),
+        title: const Text(
+          'Settings',
+          style: TextStyle(
+            color: Colors.white,
+            letterSpacing: 1.2,
+          ),
+        ),
+        iconTheme: const IconThemeData(
+          color: Colors.white,
+        ),
       ),
       body: ListView(
         padding: const EdgeInsets.all(20),
@@ -610,22 +818,32 @@ class _SettingsPageState extends State<SettingsPage> {
             style: ElevatedButton.styleFrom(
               backgroundColor: kAccentFocus,
               foregroundColor: Colors.black,
-              padding: const EdgeInsets.symmetric(vertical: 16),
+              padding: const EdgeInsets.symmetric(
+                vertical: 16,
+              ),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(14),
               ),
             ),
             onPressed: () {
-              Navigator.pop(context, {
-                'workMinutes': _work,
-                'breakMinutes': _brk,
-                'totalCycles': _cycles,
-                'soundEnabled': _sound,
-                'vibrateEnabled': _vibrate,
-              });
+              Navigator.pop(
+                context,
+                {
+                  'workMinutes': _work,
+                  'breakMinutes': _brk,
+                  'totalCycles': _cycles,
+                  'soundEnabled': _sound,
+                  'vibrateEnabled': _vibrate,
+                },
+              );
             },
-            child: const Text('Save',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            child: const Text(
+              'Save',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ),
         ],
       ),
@@ -640,7 +858,10 @@ class _SettingsPageState extends State<SettingsPage> {
     required ValueChanged<int> onChange,
   }) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      padding: const EdgeInsets.symmetric(
+        horizontal: 16,
+        vertical: 10,
+      ),
       decoration: BoxDecoration(
         color: kSurface,
         borderRadius: BorderRadius.circular(16),
@@ -650,12 +871,20 @@ class _SettingsPageState extends State<SettingsPage> {
           Expanded(
             child: Text(
               label,
-              style: const TextStyle(color: Colors.white, fontSize: 15),
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 15,
+              ),
             ),
           ),
           IconButton(
-            icon: const Icon(Icons.remove, color: Colors.white70),
-            onPressed: value > min ? () => onChange(value - 1) : null,
+            icon: const Icon(
+              Icons.remove,
+              color: Colors.white70,
+            ),
+            onPressed: value > min
+                ? () => onChange(value - 1)
+                : null,
           ),
           SizedBox(
             width: 36,
@@ -670,8 +899,13 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ),
           IconButton(
-            icon: const Icon(Icons.add, color: Colors.white70),
-            onPressed: value < max ? () => onChange(value + 1) : null,
+            icon: const Icon(
+              Icons.add,
+              color: Colors.white70,
+            ),
+            onPressed: value < max
+                ? () => onChange(value + 1)
+                : null,
           ),
         ],
       ),
@@ -684,7 +918,10 @@ class _SettingsPageState extends State<SettingsPage> {
     required ValueChanged<bool> onChange,
   }) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      padding: const EdgeInsets.symmetric(
+        horizontal: 16,
+        vertical: 4,
+      ),
       decoration: BoxDecoration(
         color: kSurface,
         borderRadius: BorderRadius.circular(16),
@@ -694,7 +931,10 @@ class _SettingsPageState extends State<SettingsPage> {
           Expanded(
             child: Text(
               label,
-              style: const TextStyle(color: Colors.white, fontSize: 15),
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 15,
+              ),
             ),
           ),
           Switch(
