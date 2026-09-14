@@ -10,18 +10,16 @@ class NotificationService {
   final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
 
-  static const String _channelId = 'blink_channel';
-  static const String _channelName = 'Blink';
-  static const String _channelDesc = 'Blink timer notifications';
+  static const String _channelId = 'blink_alert';
+  static const String _channelName = 'Blink alerts';
+  static const String _channelDesc = 'Full-screen break alerts';
 
   Future<void> init() async {
     tz.initializeTimeZones();
     try {
       final name = await FlutterTimezone.getLocalTimezone();
       tz.setLocalLocation(tz.getLocation(name));
-    } catch (_) {
-      // Fallback to UTC if timezone lookup fails
-    }
+    } catch (_) {}
 
     const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
     const initSettings = InitializationSettings(android: androidInit);
@@ -37,7 +35,9 @@ class NotificationService {
       _channelId,
       _channelName,
       description: _channelDesc,
-      importance: Importance.high,
+      importance: Importance.max,
+      playSound: false,
+      enableVibration: false,
     );
     await _plugin
         .resolvePlatformSpecificImplementation<
@@ -45,7 +45,30 @@ class NotificationService {
         ?.createNotificationChannel(channel);
   }
 
-  Future<void> showNow({
+  /// Full-screen alert that brings the app to the foreground.
+  Future<void> showBreakAlert({
+    required String title,
+    required String body,
+  }) async {
+    const details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        _channelId,
+        _channelName,
+        channelDescription: _channelDesc,
+        importance: Importance.max,
+        priority: Priority.max,
+        fullScreenIntent: true,
+        category: AndroidNotificationCategory.alarm,
+        playSound: false,
+        enableVibration: false,
+        ongoing: false,
+        autoCancel: true,
+      ),
+    );
+    await _plugin.show(0, title, body, details);
+  }
+
+  Future<void> showSimple({
     required String title,
     required String body,
   }) async {
@@ -56,9 +79,11 @@ class NotificationService {
         channelDescription: _channelDesc,
         importance: Importance.high,
         priority: Priority.high,
+        playSound: false,
+        enableVibration: false,
       ),
     );
-    await _plugin.show(0, title, body, details);
+    await _plugin.show(1, title, body, details);
   }
 
   Future<void> cancelAll() async {
