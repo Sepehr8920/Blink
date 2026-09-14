@@ -10,9 +10,6 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
@@ -25,21 +22,29 @@ jobs:
           flutter-version: '3.24.0'
           channel: 'stable'
 
-      - name: Create Flutter project structure
+      - name: Create fresh Flutter project
+        run: flutter create --org com.blink --project-name blink blink_app
+
+      - name: Checkout our code
+        uses: actions/checkout@v4
+        with:
+          path: our_code
+
+      - name: Copy our code into project
         run: |
-          flutter create --org com.blink --project-name blink --platforms android temp_project
-          cp -r temp_project/android ./android
-          cp temp_project/.gitignore ./.gitignore
-          rm -rf temp_project
+          cp our_code/lib/main.dart blink_app/lib/main.dart
+          cp our_code/pubspec.yaml blink_app/pubspec.yaml
 
       - name: Get dependencies
-        run: flutter pub get
+        working-directory: ./blink_app
+        run: flutter get
 
       - name: Build APK
+        working-directory: ./blink_app
         run: flutter build apk --release
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: blink-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: blink_app/build/app/outputs/flutter-apk/app-release.apk
